@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Form, Request
+from fastapi.responses import HTMLResponse
 from app.plugins.base import LifeOSPlugin
 import sqlite3
 
@@ -12,7 +13,7 @@ class HabitsPlugin(LifeOSPlugin):
             CREATE TABLE IF NOT EXISTS habits (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                target_streak INTEGER DEFAULT 1,
+                target_streak INTEGER DEFAULT 7,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -20,19 +21,107 @@ class HabitsPlugin(LifeOSPlugin):
             CREATE TABLE IF NOT EXISTS habit_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 habit_id INTEGER,
-                completed_date TEXT NOT NULL,
-                FOREIGN KEY (habit_id) REFERENCES habits (id)
+                completed_date TEXT NOT NULL DEFAULT (date('now')),
+                FOREIGN KEY (habit_id) REFERENCES habits (id) ON DELETE CASCADE
             )
         """)
+        # Dedupe: one check-in per habit per day
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_habit_log_unique ON habit_logs (habit_id, completed_date)")
 
     def register_routes(self) -> APIRouter:
         router = APIRouter()
 
         @router.get("/")
-        def list_habits():
-            return {"plugin": self.name, "status": "active"}
+        def list_habits_api(request: Request):
+            db = request.app.state.db if hasattr(request.app.state, "db") else None
+            # fallback to direct sqlite connection via app config or database module
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                habits = conn.execute("SELECT * FROM habits ORDER BY id DESC").fetchall()
+            return {"plugin": self.name, "count": len(habits)}
+
+        @router.get("/list", response_class=HTMLResponse)
+        def habits_list_html(request: Request):
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                habits = conn.execute("""
+                    SELECT h.*, 
+                    (SELECT COUNT(DISTINCT completed_date) FROM habit_logs WHERE habit_id = h.id) as streak
+                    FROM habits h ORDER BY h.id DESC
+                """).fetchall()
+            
+            if not habits:
+                return "<div class='text-slate-500 py-8 text-center'>No habits tracked yet. Add one above!</div>"
+
+            html = "<div class='space-y-3'>"
+            for h in habits:
+                streak = h["streak"] or 0
+                target = h["target_streak"]
+                pct = min(int((streak / target) * 100), 100) if target > 0 else 0
+                html += f"""
+                <div class='bg-dark-900 border border-dark-700 rounded-xl p-4 flex items-center justify-between'>
+                    <div>
+                        <h4 class='font-semibold text-white'>{h['name']}</h4>
+                        <p class='text-xs text-slate-400 mt-0.5'>Streak: <span class='text-emerald-400 font-mono font-bold'>{streak}</span> / {target} days</p>
+                        <div class='w-32 bg-dark-700 h-1.5 rounded-full mt-2 overflow-hidden'>
+                            <div class='bg-emerald-500 h-full rounded-full' style='width: {pct}%'></div>
+                        </div>
+                    </div>
+                    <div class='flex items-center space-x-2'>
+                        <button hx-post='/api/habits/{h['id']}/check' hx-target='#habits-list' class='bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-medium transition border border-emerald-500/30'>Check Today</button>
+                        <button hx-delete='/api/habits/{h['id']}' hx-target='#habits-list' class='text-slate-500 hover:text-red-400 p-1.5 transition'>✕</button>
+                    </div>
+                </div>
+                """
+            html += "</div>"
+            return html
+
+        @router.get("/widget", response_class=HTMLResponse)
+        def habits_widget():
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                habits = conn.execute("""
+                    SELECT h.*, 
+                    (SELECT COUNT(DISTINCT completed_date) FROM habit_logs WHERE habit_id = h.id) as streak
+                    FROM habits h ORDER BY h.id DESC LIMIT 5
+                """).fetchall()
+            if not habits:
+                return "<div class='text-slate-500 py-6 text-center'>No habits yet — add one in the Habits tab.</div>"
+            html = "<div class='space-y-2 text-sm'>"
+            for h in habits:
+                html += f"""<div class='flex justify-between items-center'>
+                    <span class='text-slate-200'>{h['name']}</span>
+                    <span class='text-emerald-400 font-mono'>🔥 {h['streak'] or 0}d</span></div>"""
+            html += "</div>"
+            return html
+
+        @router.post("/", response_class=HTMLResponse)
+        def create_habit(request: Request, name: str = Form(...), target_streak: int = Form(7)):
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                conn.execute("INSERT INTO habits (name, target_streak) VALUES (?, ?)", (name, target_streak))
+            return habits_list_html(request)
+
+        @router.post("/{habit_id}/check", response_class=HTMLResponse)
+        def check_habit(request: Request, habit_id: int):
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                # Insert today's check if not already checked today
+                conn.execute("""
+                    INSERT OR IGNORE INTO habit_logs (habit_id, completed_date)
+                    VALUES (?, date('now'))
+                """, (habit_id,))
+            return habits_list_html(request)
+
+        @router.delete("/{habit_id}", response_class=HTMLResponse)
+        def delete_habit(request: Request, habit_id: int):
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                conn.execute("DELETE FROM habits WHERE id = ?", (habit_id,))
+                conn.execute("DELETE FROM habit_logs WHERE habit_id = ?", (habit_id,))
+            return habits_list_html(request)
 
         return router
 
     def get_dashboard_widgets(self) -> list:
-        return ["<div class='p-4 bg-slate-800 rounded shadow'>Habits Tracker Widget</div>"]
+        return []

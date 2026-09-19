@@ -19,8 +19,8 @@ def create_app() -> FastAPI:
     # Discover and load plugins dynamically
     load_plugins(app)
 
-    @app.get("/")
-    def root():
+    @app.get("/api/status")
+    def status():
         return {
             "system": settings.PROJECT_NAME,
             "status": "active",
@@ -56,7 +56,9 @@ def load_plugins(app: FastAPI):
                     
                     # Register routes
                     router = plugin_instance.register_routes()
-                    app.include_router(router, prefix=f"/api/{plugin_instance.name}", tags=[plugin_instance.name])
+                    # Webapp plugin serves the UI at root; other plugins under /api/<name>
+                    prefix = "" if plugin_instance.name == "webapp" else f"/api/{plugin_instance.name}"
+                    app.include_router(router, prefix=prefix, tags=[plugin_instance.name])
                     
                     app.state.plugins[plugin_instance.name] = plugin_instance
         except Exception as e:

@@ -13,7 +13,7 @@ client = TestClient(app)
 
 
 def test_root():
-    r = client.get("/")
+    r = client.get("/api/status")
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "active"
@@ -23,7 +23,7 @@ def test_root():
 def test_habits_endpoint():
     r = client.get("/api/habits/")
     assert r.status_code == 200
-    assert r.json()["status"] == "active"
+    assert r.json()["plugin"] == "habits"
 
 
 def test_plugin_registered():
