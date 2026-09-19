@@ -41,6 +41,12 @@ class P2PPlugin(LifeOSPlugin):
         if not row or row[0] == 0:
             conn.execute("INSERT INTO p2p_config (interval_minutes, min_sats, max_sats) VALUES (480, 50, 500)")
 
+        # Migration: ensure last_nudged_at column exists on pre-existing tables
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(p2p_config)").fetchall()]
+        if "last_nudged_at" not in cols:
+            conn.execute("ALTER TABLE p2p_config ADD COLUMN last_nudged_at DATETIME")
+            conn.commit()
+
     def register_routes(self) -> APIRouter:
         router = APIRouter()
 
