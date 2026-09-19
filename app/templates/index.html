@@ -3,164 +3,180 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LIFEOS — Mobile Command</title>
+    <title>LIFEOS — Command Center</title>
+    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
             darkMode: 'class',
-            theme: { extend: { colors: { dark: { 950: '#030712', 900: '#0f172a', 800: '#1e293b', 700: '#334155' } } } }
+            theme: {
+                extend: {
+                    colors: {
+                        dark: {
+                            900: '#0f172a',
+                            800: '#1e293b',
+                            700: '#334155',
+                            600: '#475569',
+                        }
+                    }
+                }
+            }
         }
     </script>
+    <!-- HTMX -->
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <!-- Alpine.js for lightweight UI state -->
     <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+    </style>
 </head>
-<body class="bg-dark-950 text-slate-100 min-h-screen font-sans antialiased pb-16"
-      x-data="{ menuOpen: false, activeTracker: 'habits', toast: null, menus: {{ menu_entries|tojson }} }">
+<body class="bg-dark-900 text-slate-100 min-h-screen font-sans antialiased selection:bg-emerald-500 selection:text-white"
+      x-data="{ activeTab: 'habits', notification: null }">
 
-    <!-- Top Bar -->
-    <header class="border-b border-dark-800 bg-dark-900/80 backdrop-blur sticky top-0 z-50 px-4 py-3 flex items-center justify-between">
-        <div class="flex items-center space-x-3">
-            <button @click="menuOpen = !menuOpen" class="p-2 rounded-xl bg-dark-800 hover:bg-dark-700 text-emerald-400 transition active:scale-95 focus:outline-none" aria-label="Menu">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
-                </svg>
-            </button>
-            <h1 class="font-bold text-lg tracking-wider text-white">LIFE<span class="text-emerald-400">OS</span></h1>
-        </div>
-        <div class="flex items-center space-x-2">
-            <span class="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping"></span>
-            <span class="text-xs font-mono text-emerald-400 uppercase" x-text="activeTracker"></span>
+    <!-- Top Navigation / Header -->
+    <header class="border-b border-dark-700 bg-dark-800/50 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-3 h-3 bg-emerald-500 rounded-full animate-pulse"></div>
+                <h1 class="font-bold text-lg tracking-wider text-white">LIFE<span class="text-emerald-400">OS</span></h1>
+                <span class="text-xs px-2 py-0.5 rounded bg-dark-700 text-slate-400 font-mono">v0.4.0</span>
+            </div>
+            <nav class="flex space-x-1 sm:space-x-2">
+                <button @click="activeTab = 'habits'" :class="activeTab === 'habits' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-dark-700'" class="px-3 py-1.5 rounded-lg text-sm font-medium transition">🔥 Habits</button>
+                <button @click="activeTab = 'expenses'" :class="activeTab === 'expenses' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-dark-700'" class="px-3 py-1.5 rounded-lg text-sm font-medium transition">💰 Expenses</button>
+                <button @click="activeTab = 'planner'" :class="activeTab === 'planner' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-dark-700'" class="px-3 py-1.5 rounded-lg text-sm font-medium transition">🗓️ Planner</button>
+                <button @click="activeTab = 'p2p'" :class="activeTab === 'p2p' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-dark-700'" class="px-3 py-1.5 rounded-lg text-sm font-medium transition">🛰️ P2P</button>
+                <button @click="activeTab = 'telegram'" :class="activeTab === 'telegram' ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-white hover:bg-dark-700'" class="px-3 py-1.5 rounded-lg text-sm font-medium transition">🤖 Bot</button>
+            </nav>
         </div>
     </header>
 
-    <!-- Menu Drawer — every plugin entry pops here, newest at the bottom -->
-    <div x-show="menuOpen" x-cloak
-         x-transition:enter="transition ease-out duration-200" x-transition:enter-start="-translate-y-4 opacity-0" x-transition:enter-end="translate-y-0 opacity-100"
-         x-transition:leave="transition ease-in duration-150" x-transition:leave-start="translate-y-0 opacity-100" x-transition:leave-end="-translate-y-4 opacity-0"
-         class="bg-dark-900 border-b border-dark-800 px-4 py-4 space-y-2 shadow-2xl sticky top-[57px] z-40">
-        <p class="text-xs uppercase font-mono text-slate-500 px-2 mb-1">Select Tracker</p>
+    <!-- Main Container -->
+    <main class="max-w-6xl mx-auto px-4 py-6 space-y-6">
 
-        <template x-for="(m, i) in menus" :key="i">
-            <button @click="activeTracker = m.id; menuOpen = false"
-                    :class="activeTracker === m.id ? 'bg-emerald-600/20 text-emerald-400 border-emerald-500/40' : 'bg-dark-800 text-slate-300 border-transparent hover:bg-dark-700'"
-                    class="w-full text-left px-4 py-3 rounded-xl font-medium border transition flex items-center justify-between">
-                <span x-text="m.icon + '  ' + m.label"></span>
-                <span class="text-xs font-mono opacity-60" x-text="m.badge"></span>
-            </button>
-        </template>
-    </div>
-
-    <!-- Main View Area -->
-    <main class="max-w-md mx-auto px-4 py-6">
-        <template x-if="toast">
-            <div class="p-3 mb-5 rounded-xl bg-emerald-950 border border-emerald-500/30 text-emerald-200 text-sm text-center shadow-lg" x-text="toast"></div>
+        <!-- Global Notification Toast -->
+        <template x-if="notification">
+            <div class="p-4 rounded-xl border flex items-center justify-between shadow-lg transition transform"
+                 :class="notification.success ? 'bg-emerald-950/80 border-emerald-500/30 text-emerald-200' : 'bg-red-950/80 border-red-500/30 text-red-200'"
+                 x-transition>
+                <span x-text="notification.message"></span>
+                <button @click="notification = null" class="text-xs uppercase font-mono opacity-70 hover:opacity-100">Dismiss</button>
+            </div>
         </template>
 
-        <!-- Habits Tracker -->
-        <div x-show="activeTracker === 'habits'" class="space-y-5">
-            <div class="bg-dark-900 border border-dark-800 rounded-2xl p-5 space-y-4">
-                <h2 class="font-bold text-lg text-white">🔥 Habit Streaks</h2>
-                <form hx-post="/api/habits/" hx-target="#habits-list" hx-swap="outerHTML" @submit="$el.reset(); toast = 'Habit added!'" class="flex gap-2">
+        <!-- HABITS TAB -->
+        <div x-show="activeTab === 'habits'" class="space-y-6">
+            <div class="border border-dark-700 bg-dark-800/50 rounded-2xl p-5">
+                <h2 class="font-bold text-lg text-white mb-4">🔥 Habit Streaks</h2>
+                <form hx-post="/api/habits/" hx-target="#habits-list" hx-swap="outerHTML"
+                      @submit="$el.reset()"
+                      class="flex gap-2 mb-4">
                     <input type="text" name="name" placeholder="New habit (e.g. Gym)..." required
-                           class="flex-1 bg-dark-950 border border-dark-800 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
+                           class="flex-1 bg-dark-800 border border-dark-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                     <input type="number" name="target_streak" value="7" min="1" max="365" title="Days"
-                           class="w-16 bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm">
-                    <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2.5 rounded-xl text-sm">+</button>
+                           class="w-16 bg-dark-800 border border-dark-700 rounded-xl px-3 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm">
+                    <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2.5 rounded-xl text-sm">+ Add</button>
                 </form>
             </div>
             <div id="habits-list" hx-get="/api/habits/list" hx-trigger="load">
-                <div class="text-slate-500 py-8 text-center text-sm">Loading habits...</div>
+                <div class="text-slate-500 py-8 text-center">Loading habits...</div>
             </div>
         </div>
 
-        <!-- Expenses Tracker -->
-        <div x-show="activeTracker === 'expenses'" class="space-y-5" x-cloak>
-            <div class="bg-dark-900 border border-dark-800 rounded-2xl p-5 space-y-4">
-                <div class="flex items-center justify-between">
-                    <h2 class="font-bold text-lg text-white">💰 Expenses</h2>
-                    <span class="text-xs font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2.5 py-1 rounded-lg" hx-get="/api/expenses/total" hx-trigger="load">€0.00</span>
-                </div>
-                <form hx-post="/api/expenses/" hx-target="#expenses-list" hx-swap="outerHTML" @submit="$el.reset(); toast = 'Expense logged!'" class="space-y-3">
+        <!-- EXPENSES TAB -->
+        <div x-show="activeTab === 'expenses'" x-cloak class="space-y-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="font-bold text-lg text-white">💰 Expenses</h2>
+                <span class="text-xs font-mono text-emerald-400 bg-dark-700 border border-dark-600 px-2.5 py-1 rounded-lg"
+                      hx-get="/api/expenses/total" hx-trigger="load">€0.00</span>
+            </div>
+            <div class="border border-dark-700 bg-dark-800/50 rounded-2xl p-5">
+                <form hx-post="/api/expenses/" hx-target="#expenses-list" hx-swap="outerHTML"
+                      @submit="$el.reset()" class="space-y-3">
                     <div class="grid grid-cols-2 gap-2">
                         <input type="number" step="0.01" name="amount" placeholder="Amount (€)..." required
-                               class="bg-dark-950 border border-dark-800 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
+                               class="bg-dark-800 border border-dark-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                         <input type="text" name="category" placeholder="Category..." required
-                               class="bg-dark-950 border border-dark-800 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
+                               class="bg-dark-800 border border-dark-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                     </div>
                     <div class="flex gap-2">
                         <input type="text" name="note" placeholder="Note (optional)..."
-                               class="flex-1 bg-dark-950 border border-dark-800 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
+                               class="flex-1 bg-dark-800 border border-dark-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                         <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-5 py-2.5 rounded-xl text-sm">Log</button>
                     </div>
                 </form>
             </div>
             <div id="expenses-list" hx-get="/api/expenses/list" hx-trigger="load">
-                <div class="text-slate-500 py-8 text-center text-sm">Loading expenses...</div>
+                <div class="text-slate-500 py-8 text-center">Loading expenses...</div>
             </div>
         </div>
 
-        <!-- Planner -->
-        <div x-show="activeTracker === 'planner'" class="space-y-5" x-cloak>
-            <div class="bg-dark-900 border border-dark-800 rounded-2xl p-5 space-y-4">
-                <h2 class="font-bold text-lg text-white">🗓️ Planner & Goals</h2>
-                <p class="text-xs text-slate-400">Turn tracking into targets — plan, then compare plan vs actual at the bottom.</p>
-                <form hx-post="/api/planner/" hx-target="#planner-list" hx-swap="outerHTML" @submit="$el.reset(); toast = 'Plan added!'" class="space-y-3">
+        <!-- PLANNER TAB -->
+        <div x-show="activeTab === 'planner'" x-cloak class="space-y-6">
+            <h2 class="font-bold text-lg text-white mb-2">🗓️ Planner &amp; Goals</h2>
+            <p class="text-xs text-slate-400 mb-4">Turn tracking into targets — plan, then compare plan vs actual.</p>
+            <div class="border border-dark-700 bg-dark-800/50 rounded-2xl p-5">
+                <form hx-post="/api/planner/" hx-target="#planner-list" hx-swap="outerHTML"
+                      @submit="$el.reset()" class="space-y-3">
                     <div>
                         <input type="text" name="goal_label" placeholder="Goal (e.g. Gym 3x/week)..." required
-                               class="w-full bg-dark-950 border border-dark-800 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
+                               class="w-full bg-dark-800 border border-dark-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                     </div>
                     <div class="grid grid-cols-3 gap-2">
-                        <select name="target_type" class="bg-dark-950 border border-dark-800 rounded-xl px-2 py-2.5 text-white text-sm">
+                        <select name="target_type" class="bg-dark-800 border border-dark-700 rounded-xl px-2 py-2.5 text-white text-sm">
                             <option value="habit">Habit</option>
                             <option value="expense">Budget €</option>
                             <option value="p2p">P2P orders</option>
                         </select>
-                        <select name="frequency" class="bg-dark-950 border border-dark-800 rounded-xl px-2 py-2.5 text-white text-sm">
+                        <select name="frequency" class="bg-dark-800 border border-dark-700 rounded-xl px-2 py-2.5 text-white text-sm">
                             <option value="weekly">Weekly</option>
                             <option value="daily">Daily</option>
                             <option value="monthly">Monthly</option>
                         </select>
                         <input type="number" name="target_quantity" value="3" min="1" placeholder="Target"
-                               class="bg-dark-950 border border-dark-800 rounded-xl px-2 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm">
+                               class="bg-dark-800 border border-dark-700 rounded-xl px-2 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm">
                     </div>
                     <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-xl text-sm">+ Add Plan</button>
                 </form>
             </div>
             <div id="planner-list" hx-get="/api/planner/list" hx-trigger="load">
-                <div class="text-slate-500 py-8 text-center text-sm">Loading plans...</div>
+                <div class="text-slate-500 py-8 text-center">Loading plans...</div>
             </div>
         </div>
 
-        <!-- P2P Reminder -->
-        <div x-show="activeTracker === 'p2p'" class="space-y-5" x-cloak>
+        <!-- P2P TAB -->
+        <div x-show="activeTab === 'p2p'" x-cloak class="space-y-6">
+            <h2 class="font-bold text-lg text-white mb-4">🛰️ P2P Order Reminder</h2>
             <div id="p2p-area" hx-get="/api/p2p/view" hx-trigger="load">
-                <div class="text-slate-500 py-8 text-center text-sm">Loading P2P reminder...</div>
+                <div class="text-slate-500 py-8 text-center">Loading P2P schedule...</div>
             </div>
         </div>
 
-        <!-- Telegram Config -->
-        <div x-show="activeTracker === 'telegram'" class="space-y-5" x-cloak>
-            <div class="bg-dark-900 border border-dark-800 rounded-2xl p-5 space-y-4">
-                <h2 class="font-bold text-lg text-white">🤖 Telegram</h2>
-                <p class="text-xs text-slate-400">Commands: /check gym • /exp 5 coffee food • /status • /streaks • /plan • /compare • /p2p • /order 300</p>
-                <form hx-post="/api/telegram/config" @submit.prevent="toast = 'Telegram config saved!'" class="space-y-3">
+        <!-- TELEGRAM TAB -->
+        <div x-show="activeTab === 'telegram'" x-cloak class="space-y-6">
+            <h2 class="font-bold text-lg text-white mb-2">🤖 Telegram Bot</h2>
+            <p class="text-xs text-slate-400 mb-4">Commands: /check gym • /exp 5 coffee food • /status • /streaks • /plan • /compare • /p2p • /order 300</p>
+            <div class="border border-dark-700 bg-dark-800/50 rounded-2xl p-5">
+                <form hx-post="/api/telegram/config" @submit.prevent="notification = { success: true, message: 'Telegram config saved!' }" class="space-y-3">
                     <div>
                         <label class="block text-xs uppercase font-mono text-slate-400 mb-1">Bot Token</label>
                         <input type="password" name="bot_token" placeholder="887333…wWKQ"
-                               class="w-full bg-dark-950 border border-dark-800 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono text-sm">
+                               class="w-full bg-dark-800 border border-dark-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono text-sm">
                     </div>
                     <div>
                         <label class="block text-xs uppercase font-mono text-slate-400 mb-1">Chat ID</label>
                         <input type="text" name="chat_id" placeholder="8738478074"
-                               class="w-full bg-dark-950 border border-dark-800 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono text-sm">
+                               class="w-full bg-dark-800 border border-dark-700 rounded-xl px-4 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono text-sm">
                     </div>
                     <div class="pt-2 flex gap-2">
                         <button type="submit" class="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-xl text-sm">Save Config</button>
-                        <button type="button" hx-post="/api/telegram/test" @click="toast = 'Test push sent!'" class="bg-dark-800 hover:bg-dark-700 text-slate-200 font-medium px-4 py-2.5 rounded-xl text-sm">Test Push</button>
+                        <button type="button" hx-post="/api/telegram/test" @click="notification = { success: true, message: 'Test push sent!' }" class="bg-dark-700 hover:bg-dark-600 text-slate-200 font-medium px-4 py-2.5 rounded-xl text-sm">Test Push</button>
                     </div>
                 </form>
             </div>
         </div>
+
     </main>
 </body>
 </html>

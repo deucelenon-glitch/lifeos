@@ -1,6 +1,7 @@
 import importlib
 import pkgutil
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import db
 from app.plugins.base import LifeOSPlugin
@@ -12,6 +13,11 @@ def create_app() -> FastAPI:
         docs_url="/docs",
         redoc_url=None
     )
+
+    # Serve local static assets (vendored JS) — no CDN dependency
+    static_dir = settings.BASE_DIR / "app" / "static"
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
     # Initialize core database tables
     db.init_db()
