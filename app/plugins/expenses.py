@@ -90,3 +90,6 @@ class ExpensesPlugin(LifeOSPlugin):
 
     def get_dashboard_widgets(self) -> list:
         return []
+
+    def menu(self) -> dict:
+        return {"id": self.name, "icon": "💰", "label": "Expenses & Burn", "badge": "", "view": "/api/expenses/view"}

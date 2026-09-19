@@ -58,6 +58,30 @@ def reply(token: str, chat_id: int, text: str):
         print(f"[reply failed] {e}")
 
 
+def load_plugin_commands() -> dict:
+    """Auto-discover bot commands from plugins (menu-style extension)."""
+    import importlib
+    import pkgutil
+    commands = {}
+    plugins_dir = REPO_ROOT / "app" / "plugins"
+    if not plugins_dir.exists():
+        return commands
+    from app.plugins.base import LifeOSPlugin
+    for _, module_name, _ in pkgutil.iter_modules([str(plugins_dir)]):
+        if module_name == "base":
+            continue
+        try:
+            module = importlib.import_module(f"app.plugins.{module_name}")
+            for attr_name in dir(module):
+                attribute = getattr(module, attr_name)
+                if isinstance(attribute, type) and issubclass(attribute, LifeOSPlugin) and attribute is not LifeOSPlugin:
+                    instance = attribute()
+                    commands.update(instance.bot_commands())
+        except Exception as e:
+            print(f"[bot] plugin commands failed for {module_name}: {e}")
+    return commands
+
+
 def handle(chat_id: int, text: str) -> str:
     text = text.strip()
     parts = text.split()
@@ -65,13 +89,24 @@ def handle(chat_id: int, text: str) -> str:
 
     db = Database()
 
+    # Plugin commands first (planner, p2p, ...) — auto-discovered, extensible
+    plugin_cmds = load_plugin_commands()
+    if cmd in plugin_cmds:
+        try:
+            return plugin_cmds[cmd](chat_id, parts)
+        except Exception as e:
+            return f"⚠️ Plugin command error: {e}"
+
     if cmd in ("start", "help"):
+        available = "/check gym • /exp 5 coffee food • /status • /streaks"
+        extra = ", ".join(sorted(plugin_cmds.keys()))
+        if extra:
+            available += f" • {extra}"
         return (
             "*LIFEOS Bot*\n"
-            "/check gym — log habit\n"
-            "/exp 5 coffee food — log expense (amount note category)\n"
-            "/status — summary\n"
-            "/streaks — habit streaks"
+            f"{available}\n"
+            "/plans — view goals\n"
+            "/compare — plan vs actual"
         )
 
     if cmd == "check" and len(parts) >= 2:

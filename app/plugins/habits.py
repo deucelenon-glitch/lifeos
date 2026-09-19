@@ -125,3 +125,6 @@ class HabitsPlugin(LifeOSPlugin):
 
     def get_dashboard_widgets(self) -> list:
         return []
+
+    def menu(self) -> dict:
+        return {"id": self.name, "icon": "🔥", "label": "Habits & Streaks", "badge": "", "view": "/api/habits/view"}

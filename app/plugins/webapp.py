@@ -20,7 +20,32 @@ class WebAppPlugin(LifeOSPlugin):
 
         @router.get("/", response_class=HTMLResponse)
         def serve_dashboard(request: Request):
-            return templates.TemplateResponse(request, "index.html")
+            # Dynamically collect menu entries from every loaded plugin.
+            # New plugins auto-appear in the drawer, below existing ones.
+            entries = []
+            app = request.app
+            plugins = getattr(app.state, "plugins", {})
+            for name in ["habits", "expenses", "planner", "p2p", "telegram"]:
+                p = plugins.get(name)
+                if p is None:
+                    continue
+                m = p.menu()
+                for entry in (m if isinstance(m, list) else [m]):
+                    entry["id"] = entry.get("id", name)
+                    entries.append(entry)
+            # Any extra plugins not in the preferred order get appended after
+            for name, p in plugins.items():
+                if name in {"habits", "expenses", "planner", "p2p", "telegram", "webapp"}:
+                    continue
+                m = p.menu()
+                for entry in (m if isinstance(m, list) else [m]):
+                    entry["id"] = entry.get("id", name)
+                    entries.append(entry)
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                {"menu_entries": entries},
+            )
 
         return router
 
