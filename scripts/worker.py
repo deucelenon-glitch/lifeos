@@ -47,10 +47,19 @@ def main():
     plugins = collect_plugins()
     print(f"[worker] loaded {len(plugins)} plugins: {', '.join(p.name for p in plugins)}")
     print(f"[worker] checking every {CHECK_INTERVAL}s (Ctrl+C to stop)")
+    # Cooldown: remember last nudge time per plugin so reminders fire
+    # at most once per interval instead of spamming every check.
+    last_nudge = {}
     while True:
         for p in plugins:
             try:
-                p.periodic_check()
+                key = (p.name, type(p).__name__)
+                now = time.time()
+                due = p.periodic_check()
+                # periodic_check returns True when it fired a nudge (or bool result)
+                if due and now - last_nudge.get(key, 0) >= 60:
+                    last_nudge[key] = now
+                    print(f"[worker] nudge fired for {p.name}")
             except Exception as e:
                 print(f"[worker] {p.name} periodic_check error: {e}")
         time.sleep(CHECK_INTERVAL)

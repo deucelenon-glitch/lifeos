@@ -23,6 +23,7 @@ class P2PPlugin(LifeOSPlugin):
                 min_sats INTEGER DEFAULT 50,
                 max_sats INTEGER DEFAULT 500,
                 enabled INTEGER DEFAULT 1,
+                last_nudged_at DATETIME,                -- when we last pinged the user
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -48,11 +49,40 @@ class P2PPlugin(LifeOSPlugin):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 cfg = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
-                last = conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT 1").fetchone()
                 orders = conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT 10").fetchall()
 
             interval = cfg["interval_minutes"] if cfg else 480
-            status_html, next_in = self._status(cfg, last)
+            
+            # Generate the requested schedule format:
+            # Phase 1: €100 Increment Sequence (10:00 to 12:00)
+            # Phase 2: €50 Base Sequence (€50 Increments) (12:30 to 02:30)
+            schedule_html = """
+            <div class='space-y-4 text-xs font-mono'>
+                <div class='text-slate-300 font-sans font-medium mb-1'>Here is your schedule for posting the P2P orders in 30-minute intervals:</div>
+                
+                <div class='bg-dark-950/60 p-3 rounded-xl border border-dark-800 space-y-1.5'>
+                    <div class='text-emerald-400 font-bold'>Phase 1: €100 Increment Sequence</div>
+                    <div class='text-slate-300 pl-2 space-y-1'>
+                        <div>• 10:00 AM – Post €100 P2P Order</div>
+                        <div>• 10:30 AM – Post €200 P2P Order</div>
+                        <div>• 11:00 AM – Post €300 P2P Order</div>
+                        <div>• 11:30 AM – Post €400 P2P Order</div>
+                        <div>• 12:00 PM – Post €500 P2P Order</div>
+                    </div>
+                </div>
+
+                <div class='bg-dark-950/60 p-3 rounded-xl border border-dark-800 space-y-1.5'>
+                    <div class='text-emerald-400 font-bold'>Phase 2: €50 Base Sequence (€50 Increments)</div>
+                    <div class='text-slate-300 pl-2 space-y-1'>
+                        <div>• 12:30 PM – Post €50 P2P Order</div>
+                        <div>• 01:00 PM – Post €150 P2P Order</div>
+                        <div>• 01:30 PM – Post €250 P2P Order</div>
+                        <div>• 02:00 PM – Post €350 P2P Order</div>
+                        <div>• 02:30 PM – Post €450 P2P Order</div>
+                    </div>
+                </div>
+            </div>
+            """
 
             html = f"""
             <div class='space-y-4'>
@@ -60,41 +90,16 @@ class P2PPlugin(LifeOSPlugin):
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <div class='flex justify-between items-start'>
                         <div>
-                            <h3 class='font-bold text-white text-sm'>RoboSats Order Reminder</h3>
-                            <p class='text-xs text-slate-400 mt-0.5'>{status_html}</p>
-                            <p class='text-xs text-slate-500 mt-0.5'>Next reminder: <span class='font-mono text-emerald-400'>{next_in}</span></p>
+                            <h3 class='font-bold text-white text-sm'>RoboSats Order Schedule</h3>
+                            <p class='text-xs text-slate-400 mt-0.5'>Interval: {interval} min • Active sequence</p>
                         </div>
                         <span class='text-xs px-2 py-1 rounded-full bg-emerald-600/20 text-emerald-400 font-mono'>{"ON" if cfg and cfg['enabled'] else "OFF"}</span>
                     </div>
                 </div>
 
-                <!-- Config form -->
+                <!-- Schedule Display -->
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>Reminder Schedule</h4>
-                    <form hx-post='/api/p2p/config' hx-target='#p2p-area' hx-swap='outerHTML' @submit="toast = 'P2P reminder updated!'" class='space-y-3'>
-                        <div class='grid grid-cols-3 gap-2'>
-                            <div>
-                                <label class='block text-[10px] text-slate-500 mb-1'>Interval (min)</label>
-                                <input type='number' name='interval_minutes' value='{interval if cfg else 480}' min='5' step='5'
-                                       class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-center text-sm focus:outline-none'>
-                            </div>
-                            <div>
-                                <label class='block text-[10px] text-slate-500 mb-1'>Min sats</label>
-                                <input type='number' name='min_sats' value='{cfg['min_sats'] if cfg else 50}' min='1'
-                                       class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-center text-sm focus:outline-none'>
-                            </div>
-                            <div>
-                                <label class='block text-[10px] text-slate-500 mb-1'>Max sats</label>
-                                <input type='number' name='max_sats' value='{cfg['max_sats'] if cfg else 500}' min='1'
-                                       class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-center text-sm focus:outline-none'>
-                            </div>
-                        </div>
-                        <div class='flex gap-2 items-center'>
-                            <button type='submit' class='flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-xl text-sm transition'>Update Schedule</button>
-                            <button type='button' hx-post='/api/p2p/toggle' hx-target='#p2p-area' hx-swap='outerHTML'
-                                    class='px-4 py-2 rounded-xl bg-dark-800 hover:bg-dark-700 text-slate-300 text-sm'>{'Pause' if cfg and cfg['enabled'] else 'Resume'}</button>
-                        </div>
-                    </form>
+                    {schedule_html}
                 </div>
 
                 <!-- Log order -->
@@ -102,7 +107,7 @@ class P2PPlugin(LifeOSPlugin):
                     <h4 class='font-semibold text-white text-xs uppercase mb-3'>Log Order Posted</h4>
                     <form hx-post='/api/p2p/orders' hx-target='#p2p-area' hx-swap='outerHTML' @submit="toast = 'Order logged!'" class='space-y-2'>
                         <div class='grid grid-cols-3 gap-2'>
-                            <input type='number' name='amount_sats' placeholder='sats' required
+                            <input type='number' name='amount_sats' placeholder='sats/€' required
                                    class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-center text-sm placeholder-slate-500'>
                             <select name='side' class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
                                 <option value='buy'>Buy</option>
@@ -119,7 +124,7 @@ class P2PPlugin(LifeOSPlugin):
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <h4 class='font-semibold text-white text-xs uppercase mb-2'>Recent Orders</h4>
                     {"".join(
-                        f"<div class='flex justify-between text-xs py-1.5'><span class='font-mono text-emerald-400'>{o['amount_sats']} sats</span>"
+                        f"<div class='flex justify-between text-xs py-1.5'><span class='font-mono text-emerald-400'>{o['amount_sats']}</span>"
                         f"<span class='text-slate-400'>{o['side']}</span><span class='text-slate-500 font-mono'>{o['created_at']}</span></div>"
                         for o in orders
                     ) if orders else "<p class='text-slate-500 text-xs py-2'>No orders logged yet.</p>"}
@@ -197,34 +202,65 @@ class P2PPlugin(LifeOSPlugin):
         return f"Next order window opens in {hrs}h{m:02d}m.", f"in {hrs}h{m:02d}m"
 
     def reminder_due(self) -> bool:
-        """Called by the periodic worker — True if an order nudge is due."""
+        """Called by the periodic worker — True if an order nudge SHOULD FIRE (and hasn't already)."""
         from app.database import Database
+        from datetime import datetime, timedelta
         db = Database()
         with db.get_connection() as conn:
             cfg = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
             last = conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT 1").fetchone()
         if not cfg or not cfg["enabled"]:
             return False
+
+        def _parse(ts):
+            try:
+                return datetime.fromisoformat(str(ts).replace("Z", ""))
+            except (ValueError, TypeError):
+                return datetime.min
+
+        # Not due while inside an interval measured from the LAST NUDGE
+        if cfg["last_nudged_at"]:
+            since_nudge = (datetime.now() - _parse(cfg["last_nudged_at"])).total_seconds() / 60
+            if since_nudge < cfg["interval_minutes"]:
+                return False
+
         if not last:
-            return True
-        created = datetime.fromisoformat(last["created_at"].replace("Z", "")) if isinstance(last["created_at"], str) else last["created_at"]
+            return True  # no orders ever — first nudge
+        created = _parse(last["created_at"])
         return (datetime.now() - created) >= timedelta(minutes=cfg["interval_minutes"])
 
+    def mark_nudged(self):
+        """Record that we sent the nudge so we don't spam."""
+        from app.database import Database
+        db = Database()
+        with db.get_connection() as conn:
+            conn.execute("UPDATE p2p_config SET last_nudged_at = datetime('now') WHERE id = (SELECT MAX(id) FROM p2p_config)")
+
     def periodic_check(self):
-        """Worker calls this periodically; when due, fire a Termux/Telegram nudge."""
+        """Worker calls this periodically; when due, fire a Termux/Telegram nudge ONCE.
+        Returns True if a nudge was sent (cooldown bookkeeping lives here)."""
         if not self.reminder_due():
-            return
+            return False
         from app.utils.notifications import send_termux, send_telegram
         from app.database import Database
         db = Database()
         with db.get_connection() as conn:
             cfg = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
         msg = f"⏰ P2P ORDER DUE — post {cfg['min_sats']}-{cfg['max_sats']} sats on RoboSats"
-        send_termux("LifeOS P2P", msg, "urgent")
+        termux_ok = send_termux("LifeOS P2P", msg, "urgent")
+        tg_ok = False
         try:
-            send_telegram(msg)
+            with db.get_connection() as conn:
+                row = conn.execute("SELECT bot_token, chat_id FROM telegram_config ORDER BY id DESC LIMIT 1").fetchone()
+            if row:
+                tg_ok = send_telegram(row["bot_token"], row["chat_id"], msg)
         except Exception:
             pass
+        if termux_ok or tg_ok:
+            self.mark_nudged()
+            print(f"[p2p] nudge sent (termux={termux_ok}, tg={tg_ok})")
+            return True
+        return False
 
     def menu(self) -> dict:
         return {"id": self.name, "icon": "🛰️", "label": "P2P Order Reminder", "badge": "", "view": "/api/p2p/view"}
