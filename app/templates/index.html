@@ -372,20 +372,7 @@
 
 <script>
   document.addEventListener('htmx:afterOnLoad', function(evt) {
-    // Automatically re-trigger hx-get on the active tab container or relevant lists
-    const target = evt.detail.target;
-    if (target) {
-      // If a form or button mutated state, refresh related views
-      setTimeout(() => {
-        const active = document.querySelector('[x-show*="activeTab === \''"]');
-        // Or simply trigger hx-get on all visible hx-get elements
-        document.querySelectorAll('[hx-get]').forEach(el => {
-          if (el.offsetParent !== null && window.htmx) {
-            htmx.trigger(el, 'load');
-          }
-        });
-      }, 100);
-    }
+    // Intentionally left empty to prevent re-triggering loops or flickering on cashflow/p2p
   });
 </script>
 
