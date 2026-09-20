@@ -361,5 +361,104 @@
         }
         loadCategories();
     </script>
+
+<script>
+  document.addEventListener('htmx:afterOnLoad', function(evt) {
+    // Automatically re-trigger hx-get on the active tab container or relevant lists
+    const target = evt.detail.target;
+    if (target) {
+      // If a form or button mutated state, refresh related views
+      setTimeout(() => {
+        const active = document.querySelector('[x-show*="activeTab === \''"]');
+        // Or simply trigger hx-get on all visible hx-get elements
+        document.querySelectorAll('[hx-get]').forEach(el => {
+          if (el.offsetParent !== null && window.htmx) {
+            htmx.trigger(el, 'load');
+          }
+        });
+      }, 100);
+    }
+  });
+</script>
+
+<script>
+  // Foolproof background polling & refresh for LifeOS
+  window.lifeosRefresh = function() {
+    // Find current active tab from alpine or DOM
+    const bodyEl = document.querySelector('[x-data]');
+    if (!bodyEl) return;
+    
+    // Determine active tab
+    const activeTabEl = document.querySelector('[x-show*="activeTab"]');
+    // Map tabs to endpoints
+    const endpoints = {
+      'home': '/api/dashboard',
+      'habits': '/api/habits/list',
+      'expenses': '/api/expenses/list',
+      'planner': '/api/planner/view',
+      'capital': '/api/capital/view',
+      'p2p': '/api/p2p/view',
+      'money': '/api/money/view',
+      'termux': '/api/termux/view'
+    };
+
+    // Let's inspect activeTab variable via Alpine data if possible, or fallback to visible tab
+    let currentTab = 'home';
+    try {
+      // Alpine store or direct evaluation if possible, or check classes
+      const tabs = ['home', 'habits', 'expenses', 'planner', 'capital', 'p2p', 'money', 'termux'];
+      for (const t of tabs) {
+        const pane = document.querySelector(`[x-show="activeTab === '${t}'"]`);
+        if (pane && pane.style.display !== 'none' && !pane.hasAttribute('x-cloak')) {
+          currentTab = t;
+          break;
+        }
+      }
+    } catch(e) {}
+
+    const ep = endpoints[currentTab];
+    if (!ep) return;
+
+    // Target selector mapping
+    const targets = {
+      'home': '#dash-cards',
+      'habits': '#habits-list',
+      'expenses': '#expenses-list',
+      'planner': '#planner-list',
+      'capital': '#capital-area',
+      'p2p': '#p2p-area',
+      'money': '#money-area',
+      'termux': '#termux-area'
+    };
+
+    const targetSel = targets[currentTab];
+    if (!targetSel) return;
+    const targetEl = document.querySelector(targetSel);
+    if (!targetEl) return;
+
+    // Fetch fresh HTML and replace
+    fetch(ep)
+      .then(res => res.text())
+      .then(html => {
+        if (html && html.trim().length > 0) {
+          targetEl.innerHTML = html;
+          // Re-process htmx on the new content if htmx is present
+          if (window.htmx) {
+            htmx.process(targetEl);
+          }
+        }
+      }).catch(err => console.error('LifeOS refresh error:', err));
+  };
+
+  // Run refresh every 5 seconds silently
+  setInterval(window.lifeosRefresh, 5000);
+
+  // Also refresh immediately after any htmx request finishes
+  document.addEventListener('htmx:afterOnLoad', function() {
+    setTimeout(window.lifeosRefresh, 150);
+  });
+</script>
 </body>
+
+
 </html>
