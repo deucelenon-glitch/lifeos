@@ -31,6 +31,57 @@ class PlannerPlugin(LifeOSPlugin):
         from app.categories import init_categories_table
         init_categories_table(conn)
 
+    def _auto_link_habits(self, conn, plans):
+        """Heal habit plans that point at no/invalid habit.
+
+        Old plans carry target_id = 0 (no FK), or the habit may have been
+        deleted since. Match by name when possible; otherwise auto-create the
+        habit from the goal label so progress starts counting.
+        """
+        habits = conn.execute("SELECT id, name FROM habits").fetchall()
+        by_id = {h["id"]: h for h in habits}
+        unlinked = []
+        for p in plans:
+            if p["target_type"] != "habit":
+                continue
+            # unlinked = no id yet, or the referenced habit no longer exists
+            if not (p["target_id"] or 0) or p["target_id"] not in by_id:
+                unlinked.append(p)
+        if not unlinked:
+            return
+
+        def norm(s: str) -> str:
+            return "".join(c for c in (s or "").lower() if c.isalnum())
+
+        changed = 0
+        for plan in unlinked:
+            goal = norm(plan["goal_label"])
+            best = None
+            for h in habits:
+                hname = norm(h["name"])
+                if goal and (hname in goal or goal in hname):
+                    best = h
+                    break
+            if best is None and goal:
+                # No matching habit -> auto-create one from the goal label
+                name = (plan["goal_label"] or "Habit").strip()
+                cur = conn.execute(
+                    "INSERT INTO habits (name, target_streak) VALUES (?, ?)",
+                    (name, int(plan["target_quantity"] or 1)),
+                )
+                best = {"id": cur.lastrowid, "name": name}
+                habits.append(best)
+                by_id[best["id"]] = best
+            if best:
+                conn.execute(
+                    "UPDATE plans SET target_id = ?, target_name = ? WHERE id = ?",
+                    (best["id"], best["name"], plan["id"]),
+                )
+                changed += 1
+        if changed:
+            conn.commit()
+            print(f"[planner] healed {changed} unlinked habit plan(s)")
+
     def register_routes(self) -> APIRouter:
         router = APIRouter()
 
@@ -38,6 +89,8 @@ class PlannerPlugin(LifeOSPlugin):
         def planner_view(request: Request):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
+                plans = conn.execute("SELECT * FROM plans ORDER BY id DESC").fetchall()
+                self._auto_link_habits(conn, plans)
                 plans = conn.execute("SELECT * FROM plans ORDER BY id DESC").fetchall()
 
             plan_type_icon = {
@@ -148,6 +201,27 @@ class PlannerPlugin(LifeOSPlugin):
                 with global_db.get_connection() as conn:
                     from app.categories import ensure_category
                     target_name = ensure_category(conn, "expense", target_name)
+            if target_type == "habit":
+                with global_db.get_connection() as conn:
+                    if target_id:
+                        row = conn.execute(
+                            "SELECT id, name FROM habits WHERE id = ?", (target_id,)
+                        ).fetchone()
+                        if row:
+                            target_name = row["name"]
+                        else:
+                            target_id = 0
+                    if not target_id:
+                        # No habit picked (list empty or left blank) -> auto-create one
+                        # from the goal label so progress can actually be tracked.
+                        name = (goal_label or "Habit").strip()
+                        cur = conn.execute(
+                            "INSERT INTO habits (name, target_streak) VALUES (?, ?)",
+                            (name, int(target_quantity or 1)),
+                        )
+                        target_id = cur.lastrowid
+                        target_name = name
+                        conn.commit()
             with global_db.get_connection() as conn:
                 conn.execute(
                     "INSERT INTO plans (target_type, target_id, target_name, goal_label, frequency, target_quantity) VALUES (?, ?, ?, ?, ?, ?)",
