@@ -83,6 +83,11 @@ class TermuxPlugin(LifeOSPlugin):
             conn.execute(
                 "INSERT INTO termux_config (enabled, auto_log, source_account) VALUES (1, 1, 'wise')"
             )
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(termux_config)").fetchall()]
+        if "wallet_only" not in cols:
+            conn.execute("ALTER TABLE termux_config ADD COLUMN wallet_only INTEGER DEFAULT 1")
+        if "include_income" not in cols:
+            conn.execute("ALTER TABLE termux_config ADD COLUMN include_income INTEGER DEFAULT 0")
         cols = [c[1] for c in conn.execute("PRAGMA table_info(termux_scan)").fetchall()]
         if "balance_before" not in cols:
             conn.execute("ALTER TABLE termux_scan ADD COLUMN balance_before REAL")
@@ -97,6 +102,20 @@ class TermuxPlugin(LifeOSPlugin):
     # ------------------------------------------------------------------
     def _cfg(self, conn):
         return conn.execute("SELECT * FROM termux_config ORDER BY id DESC LIMIT 1").fetchone()
+
+    def _is_income(self, title: str, content: str) -> bool:
+        """True when the notification is money RECEIVED, not spent.
+        Google Wallet / bank pushes Mix “You just got paid” / “received”
+        notifications — those must never be logged as expenses."""
+        blob = f"{title} {content}".lower()
+        income_kw = [
+            "got paid", "get paid", "received", "received money", "you received",
+            "accredito", "accredited", "credit received", "incoming",
+            "sent you", "sent you money", "money received", "ricevuto",
+            "received from", "payment received", "paid you", "added money",
+            "deposit received", "money added", "money in", "top up", "topup",
+        ]
+        return any(k in blob for k in income_kw)
 
     def _is_payment(self, package: str, title: str, content: str, conn) -> bool:
         blob = f"{title} {content}".lower()
@@ -237,6 +256,28 @@ class TermuxPlugin(LifeOSPlugin):
                 if row:
                     continue
 
+                # (1) Wallet-only mode: ignore everything except the Google
+                # Wallet NFC app — bank + wallet both push the same charge,
+                # making wallet-only the single source of truth.
+                wallet_pkg = "walletnfcrel"
+                if cfg["wallet_only"]:
+                    if wallet_pkg not in (package or "").lower():
+                        conn.execute(
+                            "INSERT INTO termux_scan (notif_id, package, title, content, amount, status) VALUES (?, ?, ?, ?, NULL, 'skipped')",
+                            (dedup_key, package, title[:200], content[:400]),
+                        )
+                        summary["skipped"] += 1
+                        continue
+
+                # (2) Never auto-log money RECEIVED — only spending.
+                if not cfg["include_income"] and self._is_income(title, content):
+                    conn.execute(
+                        "INSERT INTO termux_scan (notif_id, package, title, content, amount, status) VALUES (?, ?, ?, ?, NULL, 'skipped')",
+                        (dedup_key, package, title[:200], content[:400]),
+                    )
+                    summary["skipped"] += 1
+                    continue
+
                 is_payment = self._is_payment(package, title, content, conn)
                 amount = self._parse_amount(f"{title} {content}") if is_payment else None
 
@@ -319,6 +360,8 @@ class TermuxPlugin(LifeOSPlugin):
             auto_log = bool(cfg and cfg["auto_log"])
             source = (cfg and cfg["source_account"]) or "wise"
             watched = (cfg and cfg["watched"]) or ""
+            wallet_only = bool(cfg and cfg["wallet_only"])
+            include_income = bool(cfg and cfg["include_income"])
 
             rows_html = ""
             for r in rows:
@@ -399,16 +442,24 @@ class TermuxPlugin(LifeOSPlugin):
                             </select>
                         </div>
                         <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Deduct from</label>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Source</label>
                             <select name='source_account' class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
                                 {acc_opts}
                             </select>
                         </div>
                         <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Also watch apps</label>
-                            <input type='text' name='watched' value='{watched}'
-                                   placeholder='com.example.bank, revolut'
-                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Watch</label>
+                            <select name='wallet_only' class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
+                                <option value='1' {"selected" if wallet_only else ""}>Wallet only ✓</option>
+                                <option value='0' {"selected" if not wallet_only else ""}>All apps</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Income</label>
+                            <select name='include_income' class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
+                                <option value='0' {"selected" if not include_income else ""}>Spend only ✓</option>
+                                <option value='1' {"selected" if include_income else ""}>Include income</option>
+                            </select>
                         </div>
                         <button type='submit' class='w-full bg-dark-800 hover:bg-dark-700 text-emerald-400 font-medium py-2 rounded-xl text-sm mt-2'>Save</button>
                     </form>
@@ -431,19 +482,21 @@ class TermuxPlugin(LifeOSPlugin):
             auto_log: int = Form(1),
             source_account: str = Form("wise"),
             watched: str = Form(""),
+            wallet_only: int = Form(1),
+            include_income: int = Form(0),
         ):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 cfg = self._cfg(conn)
                 if cfg:
                     conn.execute(
-                        "UPDATE termux_config SET enabled = ?, auto_log = ?, source_account = ?, watched = ? WHERE id = ?",
-                        (enabled, auto_log, source_account, watched, cfg["id"]),
+                        "UPDATE termux_config SET enabled = ?, auto_log = ?, source_account = ?, watched = ?, wallet_only = ?, include_income = ? WHERE id = ?",
+                        (enabled, auto_log, source_account, watched, wallet_only, include_income, cfg["id"]),
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO termux_config (enabled, auto_log, source_account, watched) VALUES (?, ?, ?, ?)",
-                        (enabled, auto_log, source_account, watched),
+                        "INSERT INTO termux_config (enabled, auto_log, source_account, watched, wallet_only, include_income) VALUES (?, ?, ?, ?, ?, ?)",
+                        (enabled, auto_log, source_account, watched, wallet_only, include_income),
                     )
             return termux_view(request)
 

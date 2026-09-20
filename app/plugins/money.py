@@ -75,6 +75,8 @@ class MoneyPlugin(LifeOSPlugin):
         cols = [c[1] for c in conn.execute("PRAGMA table_info(money_config)").fetchall()]
         if "income_goal" not in cols:
             conn.execute("ALTER TABLE money_config ADD COLUMN income_goal REAL DEFAULT 0")
+        if "daily_budget" not in cols:
+            conn.execute("ALTER TABLE money_config ADD COLUMN daily_budget REAL DEFAULT 0")
         conn.commit()
 
     # ------------------------------------------------------------------
@@ -103,6 +105,13 @@ class MoneyPlugin(LifeOSPlugin):
     def _today_income(self, conn) -> float:
         row = conn.execute(
             "SELECT COALESCE(SUM(amount),0) FROM income_entries WHERE income_date = date('now')"
+        ).fetchone()
+        return _r2(row[0])
+
+    def _today_burn(self, conn) -> float:
+        """Spent today, live from the Expenses tracker."""
+        row = conn.execute(
+            "SELECT COALESCE(SUM(amount),0) FROM expenses WHERE expense_date = date('now')"
         ).fetchone()
         return _r2(row[0])
 
@@ -144,7 +153,8 @@ class MoneyPlugin(LifeOSPlugin):
     # public API used by other plugins (P2P link)
     # ------------------------------------------------------------------
     def record_income(self, amount: float, source: str = "manual", note: str = "", ref_id: int = None, income_date: str = None):
-        """Log income. Used by P2P ledger to auto-feed daily profit."""
+        """Log income. Used by P2P ledger to auto-feed daily profit.
+        Also credits the capital account so income flows into Net Worth."""
         if not amount or amount == 0:
             return None
         from app.database import Database
@@ -161,6 +171,18 @@ class MoneyPlugin(LifeOSPlugin):
                     (_r2(amount), source, note or source, ref_id),
                 )
             row_id = cur.lastrowid
+            # Credit the capital account — which one? The termux expense source
+            # (the account expenses deduct from) so income/expense are symmetric.
+            cap_cfg = conn.execute(
+                "SELECT source_account FROM termux_config ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            platform = (cap_cfg["source_account"] if cap_cfg else None) or "wise"
+        if row_id:
+            try:
+                from app.plugins.expenses import ExpensesPlugin
+                ExpensesPlugin()._credit_to_capital(amount, "EUR", platform)
+            except Exception as e:
+                print(f"[money] credit-to-capital failed: {e}")
         return row_id
 
     def remove_income_ref(self, ref_id: int, source: str = "p2p"):
@@ -257,6 +279,7 @@ class MoneyPlugin(LifeOSPlugin):
                 income = self._month_income(conn)
                 burn = self._month_burn(conn)
                 today = self._today_income(conn)
+                today_spent = self._today_burn(conn)
                 entries = conn.execute(
                     "SELECT * FROM income_entries ORDER BY id DESC LIMIT 15"
                 ).fetchall()
@@ -267,6 +290,7 @@ class MoneyPlugin(LifeOSPlugin):
             rent = cfg["rent_amount"] or 0
             budget = cfg["monthly_budget"] or 0
             income_goal = cfg["income_goal"] or 0
+            daily_budget = cfg["daily_budget"] or 0
             due_day = cfg["rent_due_day"] or 1
             cur = cfg["currency"] or "€"
             today_d = datetime.now().day
@@ -365,6 +389,28 @@ class MoneyPlugin(LifeOSPlugin):
                 daily_txt = "Set monthly goal to unlock"
                 daily_cls = "text-slate-400"
 
+            # Daily budget — explicit override, else monthly budget ÷ 30
+            eff_daily_budget = daily_budget if daily_budget > 0 else (_r2(budget / 30) if budget > 0 else 0.0)
+            if eff_daily_budget > 0:
+                daily_spent_pct = min(100.0, (today_spent / eff_daily_budget) * 100)
+                daily_left = _r2(max(0.0, eff_daily_budget - today_spent))
+                if today_spent > eff_daily_budget:
+                    daily_bud_txt = f"🔴 Over by {cur}{_r2(today_spent - eff_daily_budget):.2f} today"
+                    daily_bud_cls = "text-red-400"
+                    daily_bud_state = "OVER"
+                elif today_spent >= eff_daily_budget * 0.8:
+                    daily_bud_txt = f"🟠 {cur}{daily_left:.2f} left today"
+                    daily_bud_cls = "text-amber-400"
+                    daily_bud_state = "WARN"
+                else:
+                    daily_bud_txt = f"🟢 {cur}{daily_left:.2f} left today"
+                    daily_bud_cls = "text-emerald-400"
+                    daily_bud_state = "OK"
+            else:
+                daily_bud_txt = "Set a budget (or daily override) to unlock"
+                daily_bud_cls = "text-slate-400"
+                daily_bud_state = "—"
+
             if budget > 0:
                 remaining = _r2(budget - burn)
                 if burn > budget:
@@ -405,6 +451,30 @@ class MoneyPlugin(LifeOSPlugin):
                     <span class='text-emerald-400 font-mono'>+{cur}{e['amount']:.2f}</span>
                 </div>"""
 
+            # ---- daily metrics: income / spend / net / budget vs spend -------
+            daily_net = _r2(today_income - today_spent)
+            if today_spent > 0 or today_income > 0:
+                if daily_net >= 0:
+                    net_txt = f"+{cur}{daily_net:.2f} net today"
+                    net_cls = "text-emerald-400"
+                else:
+                    net_txt = f"−{cur}{abs(daily_net):.2f} net today"
+                    net_cls = "text-red-400"
+            else:
+                net_txt = "Nothing logged yet today"
+                net_cls = "text-slate-500"
+
+            metrics_html = f"""
+            <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
+                <div class='text-[10px] uppercase font-mono text-slate-400'>Today</div>
+                <div class='flex flex-wrap gap-x-4 gap-y-1 text-sm'>
+                    <span class='font-mono text-emerald-400'>+{cur}{today_income:.2f} in</span>
+                    <span class='font-mono text-red-400'>−{cur}{today_spent:.2f} out</span>
+                    <span class='font-mono {net_cls} font-bold'>{net_txt}</span>
+                    <span class='font-mono {daily_bud_cls}'>daily budget {cur}{eff_daily_budget:.2f} · {daily_bud_state}</span>
+                </div>
+            </div>"""
+
             html = f"""
             <div id='money-area'>
             <div class='space-y-4'>
@@ -418,7 +488,9 @@ class MoneyPlugin(LifeOSPlugin):
                     </div>
                 </div>
 
-                <div class='grid grid-cols-2 md:grid-cols-5 gap-3'>
+                {metrics_html}
+
+                <div class='grid grid-cols-2 md:grid-cols-6 gap-3'>
                     <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Income (month)</div>
                         <div class='text-xl font-bold text-emerald-400 font-mono'>{cur}{income:.2f}</div>
@@ -428,6 +500,11 @@ class MoneyPlugin(LifeOSPlugin):
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Daily Target</div>
                         <div class='text-xl font-bold {daily_cls} font-mono'>{cur}{daily_goal:.2f}</div>
                         <div class='text-[10px] {daily_cls}'>{daily_txt}</div>
+                    </div>
+                    <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Daily Budget</div>
+                        <div class='text-xl font-bold {daily_bud_cls} font-mono'>{cur}{eff_daily_budget:.2f}</div>
+                        <div class='text-[10px] {daily_bud_cls}'>{daily_bud_txt} · spent {cur}{today_spent:.2f}</div>
                     </div>
                     <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Income Goal</div>
@@ -514,7 +591,7 @@ class MoneyPlugin(LifeOSPlugin):
                     <h4 class='font-semibold text-white text-xs uppercase mb-3'>⚙️ Config — rent & budget</h4>
                     <form hx-post='/api/money/config' hx-target='#money-area' hx-swap='outerHTML'
                           @submit="toast = 'Config saved ✓ — budget re-evaluated'"
-                          class='grid grid-cols-2 md:grid-cols-5 gap-2 items-end'>
+                          class='grid grid-cols-2 md:grid-cols-6 gap-2 items-end'>
                         <div>
                             <label class='text-[10px] uppercase font-mono text-slate-400'>Rent {cur}/mo</label>
                             <input type='number' step='0.01' name='rent_amount' value='{rent:.2f}'
@@ -528,6 +605,11 @@ class MoneyPlugin(LifeOSPlugin):
                         <div>
                             <label class='text-[10px] uppercase font-mono text-slate-400'>Monthly budget {cur}</label>
                             <input type='number' step='0.01' name='monthly_budget' value='{budget:.2f}'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Daily budget {cur} <span class='text-slate-600'>(0=auto)</span></label>
+                            <input type='number' step='0.01' name='daily_budget' value='{daily_budget:.2f}'
                                    class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                         </div>
                         <div>
@@ -581,19 +663,20 @@ class MoneyPlugin(LifeOSPlugin):
             rent_due_day: int = Form(1),
             monthly_budget: float = Form(0),
             income_goal: float = Form(0),
+            daily_budget: float = Form(0),
         ):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 cfg = self._cfg(conn)
                 if cfg:
                     conn.execute(
-                        "UPDATE money_config SET rent_amount = ?, rent_due_day = ?, monthly_budget = ?, income_goal = ? WHERE id = ?",
-                        (rent_amount, rent_due_day, monthly_budget, income_goal, cfg["id"]),
+                        "UPDATE money_config SET rent_amount = ?, rent_due_day = ?, monthly_budget = ?, income_goal = ?, daily_budget = ? WHERE id = ?",
+                        (rent_amount, rent_due_day, monthly_budget, income_goal, daily_budget, cfg["id"]),
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO money_config (rent_amount, rent_due_day, monthly_budget, income_goal) VALUES (?, ?, ?, ?)",
-                        (rent_amount, rent_due_day, monthly_budget, income_goal),
+                        "INSERT INTO money_config (rent_amount, rent_due_day, monthly_budget, income_goal, daily_budget) VALUES (?, ?, ?, ?, ?)",
+                        (rent_amount, rent_due_day, monthly_budget, income_goal, daily_budget),
                     )
             self.check_budget(notify=True)
             return money_view(request)

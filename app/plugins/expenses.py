@@ -86,6 +86,31 @@ class ExpensesPlugin(LifeOSPlugin):
                 (refund, acc["id"]),
             )
 
+    def _credit_to_capital(self, amount: float, currency: str, platform: str):
+        """Credit income to a capital account, converting EUR<->USD.
+        With a Fee. Mirror of _refund_to_capital — balances flow into capital."""
+        if not platform or amount <= 0:
+            return
+        from app.database import db as global_db
+        from app.plugins.capital import _fx_eur_to_usd
+        with global_db.get_connection() as conn:
+            acc = conn.execute(
+                "SELECT * FROM capital_accounts WHERE platform = ? ORDER BY id LIMIT 1",
+                (platform,),
+            ).fetchone()
+            if not acc:
+                return
+            if acc["currency"] == currency:
+                credit = amount
+            elif acc["currency"] == "USD":
+                credit = amount * _fx_eur_to_usd()
+            else:
+                credit = amount / _fx_eur_to_usd()
+            conn.execute(
+                "UPDATE capital_accounts SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (credit, acc["id"]),
+            )
+
     def create_expense_direct(self, amount: float, category: str, note: str = "", expense_date: str = "", source_account: str = ""):
         """Programmatic expense creation (used by habits one-click buttons).
         Doesn't need HTTP request/response, just logs + deducts from capital."""
