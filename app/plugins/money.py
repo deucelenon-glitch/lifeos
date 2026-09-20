@@ -306,6 +306,7 @@ class MoneyPlugin(LifeOSPlugin):
                 </div>"""
 
             html = f"""
+            <div id='money-area' hx-get='/api/money/view' hx-trigger='load'>
             <div class='space-y-4'>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <div class='flex justify-between items-center'>
@@ -408,6 +409,7 @@ class MoneyPlugin(LifeOSPlugin):
                     </form>
                     <p class='text-[10px] text-slate-500 mt-1.5 font-mono'>alerts: 🔴 over-budget · 🟠 80% warn · 🟢 praise when back under — pushed via Termux/Telegram by the worker</p>
                 </div>
+            </div>
             </div>
             """
             return html

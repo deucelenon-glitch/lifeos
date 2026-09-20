@@ -151,10 +151,14 @@ class P2PPlugin(LifeOSPlugin):
                 rate = self._rate(conn)
                 orders = self._orders(conn, 200)
                 totals = self._totals(conn)
+                # Monthly goal: single source of truth = Cashflow income goal
+                goal_row = conn.execute(
+                    "SELECT income_goal FROM money_config ORDER BY id DESC LIMIT 1"
+                ).fetchone()
 
             order_size = cfg["order_size"] or 0
             reminder_time = cfg["reminder_time"] or ""
-            monthly_goal = cfg["monthly_goal"] or 0
+            monthly_goal = (goal_row["income_goal"] if goal_row else 0) or 0
 
             # Monthly progress toward the P2P order goal (EUR received this month)
             month_prefix = datetime.now().strftime("%Y-%m")
@@ -167,11 +171,12 @@ class P2PPlugin(LifeOSPlugin):
             month_eur = _round2(mrow["s"] or 0)
             month_orders = mrow["c"] or 0
 
-            # Projections: hit the monthly goal every month → 6-month / 1-year
+            # Projections: hit the Cashflow goal every month → 6-month / 1-year
             proj_6 = _round2(monthly_goal * 6)
             proj_12 = _round2(monthly_goal * 12)
             pct = min(100.0, (month_eur / monthly_goal * 100) if monthly_goal > 0 else 0.0)
             goal_left = _round2(max(0.0, monthly_goal - month_eur))
+            orders_needed = _round2(monthly_goal / order_size) if order_size else 0
 
             # Reminder options every €50
             size_opts = "".join(
@@ -199,6 +204,7 @@ class P2PPlugin(LifeOSPlugin):
                 </tr>"""
 
             html = f"""
+            <div id='p2p-area' hx-get='/api/p2p/view' hx-trigger='load'>
             <div class='space-y-4'>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4 grid grid-cols-2 md:grid-cols-5 gap-3'>
                     <div>
@@ -249,9 +255,8 @@ class P2PPlugin(LifeOSPlugin):
                                    class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                         </div>
                         <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Monthly goal €</label>
-                            <input type='number' step='50' name='monthly_goal' value='{monthly_goal:.0f}' min='0'
-                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Monthly goal</label>
+                            <div class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>€{monthly_goal:.0f} · <span class='text-slate-500'>from Cashflow</span></div>
                         </div>
                         <div class='bg-dark-950 rounded-lg px-2 py-2 text-center'>
                             <div class='text-[10px] uppercase font-mono text-slate-400'>Progress</div>
@@ -264,7 +269,7 @@ class P2PPlugin(LifeOSPlugin):
                         <span class='text-slate-400'>📈 Projection:</span>
                         <span class='px-2 py-1 rounded bg-dark-800 font-mono text-slate-200'>6mo → <b class='text-emerald-400'>€{proj_6:,.0f}</b></span>
                         <span class='px-2 py-1 rounded bg-dark-800 font-mono text-slate-200'>1yr → <b class='text-emerald-400'>€{proj_12:,.0f}</b></span>
-                        <span class='text-slate-500'>at €{monthly_goal:.0f}/mo × {_round2(monthly_goal / order_size) if order_size else 0:.0f} orders</span>
+                        <span class='text-slate-500'>at €{monthly_goal:.0f}/mo × {orders_needed:.0f} orders</span>
                     </div>
                 </div>
 
@@ -345,6 +350,7 @@ class P2PPlugin(LifeOSPlugin):
                     </table>
                     <div class='text-[10px] text-slate-500 mt-1 font-mono'>profit = (receive × rate) − sent · profits feed 💰 Money as daily income</div>
                 </div>
+            </div>
             </div>
             """
             return html

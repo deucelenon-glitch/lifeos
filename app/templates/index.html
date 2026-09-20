@@ -37,6 +37,9 @@
         plannerTarget: 'habit',
         refreshTab(tab) {
           this.activeTab = tab;
+          this.pull(tab);
+        },
+        pull(tab) {
           const map = {
             habits: '#habits-list',
             expenses: '#expenses-list',
@@ -44,7 +47,8 @@
             planner: '#planner-list',
             p2p: '#p2p-area',
             capital: '#capital-area',
-            termux: '#termux-area'
+            termux: '#termux-area',
+            home: '#dash-cards'
           };
           const sel = map[tab];
           if (sel) {
@@ -58,8 +62,16 @@
               }
             }
           }
+        },
+        initAutoRefresh() {
+          if (this._timer) return;
+          this._timer = setInterval(() => {
+            const t = this.activeTab;
+            if (t && t !== 'telegram') this.pull(t);
+          }, 30000);
         }
-      }">
+      }"
+      x-init="initAutoRefresh()">
 
 <!-- ================= HEADER ================= -->
     <header class="border-b border-dark-700 bg-dark-900/90 backdrop-blur sticky top-0 z-50">

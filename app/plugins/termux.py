@@ -338,6 +338,7 @@ class TermuxPlugin(LifeOSPlugin):
                 acc_opts += f"<option value='{platform}'{sel}>{label} ({cur})</option>"
 
             html = f"""
+            <div id='termux-area' hx-get='/api/termux/view' hx-trigger='load'>
             <div class='space-y-4'>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <div class='flex justify-between items-center'>
@@ -389,6 +390,7 @@ class TermuxPlugin(LifeOSPlugin):
                     <h4 class='font-semibold text-white text-xs uppercase mb-2'>📥 Captured ({len(rows)})</h4>
                     {rows_html}
                 </div>
+            </div>
             </div>
             """
             return html

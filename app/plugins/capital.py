@@ -161,6 +161,7 @@ class CapitalPlugin(LifeOSPlugin):
                 </div>"""
 
             html = f"""
+            <div id='capital-area' hx-get='/api/capital/view' hx-trigger='load'>
             <div class='space-y-4'>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4 grid grid-cols-2 md:grid-cols-4 gap-3'>
                     <div>
@@ -191,6 +192,7 @@ class CapitalPlugin(LifeOSPlugin):
                         <span class='text-slate-500 text-xs'>Add another account?<br><span class='text-[10px]'>contact your operator</span></span>
                     </div>
                 </div>
+            </div>
             </div>
             """
             return html

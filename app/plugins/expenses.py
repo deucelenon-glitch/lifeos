@@ -152,15 +152,11 @@ class ExpensesPlugin(LifeOSPlugin):
             expense_date = (expense_date or "").strip() or "date('now')"
             source = (source_account or "").strip() or None
             with global_db.get_connection() as conn:
-                conn.execute(
-                    "INSERT INTO expenses (amount, category, note, expense_date, source_account) VALUES (?, ?, ?, {}, ?)".format(expense_date if expense_date.startswith("date(") else "?"),
-                    (amount, category, note, source)
-                    if expense_date.startswith("date(")
-                    else (amount, category, note, expense_date, source),
+                cur = conn.execute(
+                    "INSERT INTO expenses (amount, category, note, expense_date, source_account) VALUES (?, ?, ?, ?, ?)",
+                    (amount, category, note, expense_date, source),
                 )
-                expense_id = cur.lastrowid if (cur := conn.execute("SELECT last_insert_rowid()").fetchone()) else None
-                for r in conn.execute("SELECT id FROM expenses ORDER BY id DESC LIMIT 1"):
-                    expense_id = r["id"]
+                expense_id = cur.lastrowid
             if source:
                 before, after = self._deduct_from_capital(amount, "EUR", source)
                 if before is not None and expense_id:
