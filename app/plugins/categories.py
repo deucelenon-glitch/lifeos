@@ -19,6 +19,7 @@ class CategoriesPlugin(LifeOSPlugin):
         router = APIRouter()
 
         @router.get("/")
+        @router.get("")
         def get_categories(request: Request, domain: str = "expense"):
             from app.database import db as global_db
             with global_db.get_connection() as conn:

@@ -324,6 +324,12 @@ class MoneyPlugin(LifeOSPlugin):
                             <input type='text' name='note' placeholder='freelance / cash / p2p'
                                    class='w-44 bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
                         </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Source</label>
+                            <input type='text' name='source' list='cat-income' placeholder='Manual'
+                                   class='w-32 bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
+                            <datalist id='cat-income'></datalist>
+                        </div>
                         <button type='submit' class='bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-4 py-2 rounded-xl text-sm'>+ Log</button>
                     </form>
                 </div>
@@ -372,6 +378,10 @@ class MoneyPlugin(LifeOSPlugin):
             note: str = Form(""),
             source: str = Form("manual"),
         ):
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                from app.categories import ensure_category
+                source = ensure_category(conn, "income", source)
             self.record_income(amount, source=source, note=note)
             return money_view(request)
 

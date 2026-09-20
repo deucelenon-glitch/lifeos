@@ -31,7 +31,7 @@
     </style>
 </head>
 <body class="bg-dark-950 text-slate-100 min-h-screen font-sans antialiased pb-20"
-      x-data="{ activeTab: 'home', toast: null }">
+      x-data="{ activeTab: 'home', toast: null, plannerTarget: 'habit' }">
 
     <!-- ================= HEADER ================= -->
     <header class="border-b border-dark-700 bg-dark-900/90 backdrop-blur sticky top-0 z-50">
@@ -145,8 +145,9 @@
                     <div class="grid grid-cols-2 gap-2">
                         <input type="number" step="0.01" name="amount" placeholder="0.00"
                                required class="bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
-                        <input type="text" name="category" placeholder="Category"
+                        <input type="text" name="category" list="cat-expense" placeholder="Category"
                                required class="bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
+                        <datalist id="cat-expense"></datalist>
                     </div>
                     <div class="flex gap-2">
                         <input type="text" name="note" placeholder="Note (optional)"
@@ -173,7 +174,8 @@
                     <input type="text" name="goal_label" placeholder='Goal (e.g. "Gym 3x/week")'
                            required class="w-full bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                     <div class="grid grid-cols-3 gap-2">
-                        <select name="target_type" class="bg-dark-950 border border-dark-800 rounded-xl px-1 py-2.5 text-white text-sm">
+                        <select name="target_type" @change="plannerTarget = $event.target.value"
+                                class="bg-dark-950 border border-dark-800 rounded-xl px-1 py-2.5 text-white text-sm">
                             <option value="habit">Habit</option>
                             <option value="expense">Budget €</option>
                             <option value="p2p">P2P orders</option>
@@ -185,6 +187,11 @@
                         </select>
                         <input type="number" name="target_quantity" value="3" min="1"
                                class="bg-dark-950 border border-dark-800 rounded-xl px-1 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm">
+                    </div>
+                    <div x-show="plannerTarget === 'expense'" x-cloak class="mt-2">
+                        <input type="text" name="target_name" list="cat-expense-pick" placeholder="Category (e.g. Food)"
+                               class="w-full bg-dark-950 border border-dark-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
+                        <datalist id="cat-expense-pick"></datalist>
                     </div>
                     <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-xl text-sm">+ Add Plan</button>
                 </form>
@@ -247,5 +254,23 @@
         </div>
 
     </main>
+
+    <script>
+        // Populate category datalists from the shared categories endpoint
+        async function loadCategories() {
+            try {
+                async function fill(dlId, domain) {
+                    const res = await fetch(`/api/categories?domain=${domain}`);
+                    const data = await res.json();
+                    const el = document.getElementById(dlId);
+                    if (el) el.innerHTML = data.categories.map(c => `<option value="${c}">`).join('');
+                }
+                await fill('cat-expense', 'expense');
+                await fill('cat-expense-pick', 'expense');
+                await fill('cat-income', 'income');
+            } catch (e) { /* non-fatal */ }
+        }
+        loadCategories();
+    </script>
 </body>
 </html>

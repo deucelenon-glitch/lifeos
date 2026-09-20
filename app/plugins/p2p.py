@@ -203,7 +203,7 @@ class P2PPlugin(LifeOSPlugin):
                         <div>
                             <label class='text-[10px] uppercase font-mono text-slate-400'>Note (owner)</label>
                             <input type='text' name='note' placeholder='dex' value='dex'
-                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm w-32'>
                         </div>
                         <div class='bg-dark-950 rounded-lg px-2 py-2 text-center'>
                             <div class='text-[10px] uppercase font-mono text-slate-400'>Buy USDT</div>

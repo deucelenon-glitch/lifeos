@@ -63,6 +63,14 @@ class WebAppPlugin(LifeOSPlugin):
                 # Telegram
                 tg = conn.execute("SELECT COUNT(*) c FROM telegram_config").fetchone()["c"]
 
+                # Category breakdown — this month's spend per expense category
+                cat_rows = conn.execute("""
+                    SELECT category, COALESCE(SUM(amount),0) total, COUNT(*) n
+                    FROM expenses
+                    WHERE strftime('%Y-%m', expense_date) = strftime('%Y-%m', 'now')
+                    GROUP BY category ORDER BY total DESC
+                """).fetchall()
+
             card = lambda title, value, sub, accent="text-emerald-400", tag="" : f"""
             <div class='bg-dark-800/50 border border-dark-700 rounded-2xl p-4 flex flex-col gap-1'>
                 <span class='text-[10px] uppercase font-mono text-slate-400'>{title} {tag}</span>
@@ -71,6 +79,15 @@ class WebAppPlugin(LifeOSPlugin):
             </div>"""
 
             best = f"{best_habit['name']} · {best_habit['streak']}d" if best_habit and best_habit["streak"] else "track one below"
+
+            # Second row: per-category spend chips (dynamic link: categories live in expenses)
+            cat_chips = "".join(
+                f"<div class='bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 flex justify-between'>"
+                f"<span class='text-xs text-slate-300 font-mono uppercase'>{r['category']}</span>"
+                f"<span class='text-xs font-mono text-white'>€{r['total']:.2f} <span class='text-slate-500'>×{r['n']}</span></span></div>"
+                for r in cat_rows
+            ) or "<div class='text-xs text-slate-500 py-3'>Log expenses to see per-category spend.</div>"
+
             return card("🔥 Habits", str(habit_count), best, "text-white") + card(
                 "💰 Burn (month)", f"€{burn:.2f}", f"{expense_count} logged", "text-white"
             ) + card(
@@ -79,7 +96,11 @@ class WebAppPlugin(LifeOSPlugin):
                 "🛰️ P2P", "ON" if p2p_on else "OFF", p2p_sub, "text-emerald-400" if p2p_on else "text-slate-400"
             ) + card(
                 "🤖 Bot", "Linked" if tg else "Unlinked", "telegram config", "text-emerald-400" if tg else "text-slate-400"
-            )
+            ) + f"""
+            <div class='bg-dark-800/50 border border-dark-700 rounded-2xl p-4'>
+                <span class='text-[10px] uppercase font-mono text-slate-400'>🧩 Spend by Category (month)</span>
+                <div class='space-y-1.5 mt-2'>{cat_chips}</div>
+            </div>"""
 
         @router.get("/", response_class=HTMLResponse)
         def serve_dashboard(request: Request):
