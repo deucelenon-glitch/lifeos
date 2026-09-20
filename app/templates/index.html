@@ -37,7 +37,7 @@
                    // Re-pull the target list so data logged from the Planner
                    // (or anywhere else) shows up the moment you open the tab.
                    const map = { habits: '#habits-list', expenses: '#expenses-list',
-                                 money: '#money-area', planner: '#planner-list', p2p: '#p2p-area' };
+                                 money: '#money-area', planner: '#planner-list', p2p: '#p2p-area', capital: '#capital-area' };
                    const sel = map[tab];
                    if (sel) {
                      const el = document.querySelector(sel);
@@ -73,6 +73,9 @@
             <button @click="refreshTab('planner')"
                     :class="activeTab === 'planner' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🗓️ Planner</button>
+            <button @click="refreshTab('capital')"
+                    :class="activeTab === 'capital' ? 'tab-active' : 'tab-inactive'"
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🏦 Capital</button>
             <button @click="refreshTab('p2p')"
                     :class="activeTab === 'p2p' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🛰️ P2P</button>
@@ -221,6 +224,17 @@
             </div>
             <div id="planner-list" hx-get="/api/planner/view" hx-trigger="load">
                 <div class="text-slate-500 py-8 text-center text-sm">Loading plans…</div>
+            </div>
+        </div>
+
+        <!-- ============ CAPITAL TAB ============ -->
+        <div x-show="activeTab === 'capital'" x-cloak class="space-y-5">
+            <div class="mb-2">
+                <h2 class="font-bold text-lg text-white">🏦 Capital Tracker</h2>
+                <p class="text-xs text-slate-400 mt-0.5">Balances across exchanges &amp; banks — EUR + USD, realtime combined total.</p>
+            </div>
+            <div id="capital-area" hx-get="/api/capital/view" hx-trigger="load">
+                <div class="text-slate-500 py-8 text-center text-sm">Loading accounts…</div>
             </div>
         </div>
 
