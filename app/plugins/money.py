@@ -248,7 +248,11 @@ class MoneyPlugin(LifeOSPlugin):
             cur = cfg["currency"] or "€"
             today_d = datetime.now().day
 
-            # Income goal progress
+            # Income goal progress & daily target (assuming ~30 days in month)
+            days_in_month = 30
+            daily_goal = _r2(income_goal / days_in_month) if income_goal > 0 else 0.0
+            today_income = today
+
             if income_goal > 0:
                 goal_pct = min(100.0, (income / income_goal) * 100)
                 goal_left = _r2(max(0.0, income_goal - income))
@@ -264,6 +268,18 @@ class MoneyPlugin(LifeOSPlugin):
                 goal_txt = "Set an income goal below"
                 goal_cls = "text-slate-400"
                 goal_state = "—"
+
+            if daily_goal > 0:
+                daily_pct = min(100.0, (today_income / daily_goal) * 100)
+                if today_income >= daily_goal:
+                    daily_txt = f"🔥 Daily target met (+{cur}{_r2(today_income - daily_goal):.2f})"
+                    daily_cls = "text-emerald-400"
+                else:
+                    daily_txt = f"{cur}{_r2(daily_goal - today_income):.2f} left for today"
+                    daily_cls = "text-amber-400"
+            else:
+                daily_txt = "Set monthly goal to unlock"
+                daily_cls = "text-slate-400"
 
             if budget > 0:
                 remaining = _r2(budget - burn)
@@ -318,11 +334,16 @@ class MoneyPlugin(LifeOSPlugin):
                     </div>
                 </div>
 
-                <div class='grid grid-cols-2 md:grid-cols-4 gap-3'>
+                <div class='grid grid-cols-2 md:grid-cols-5 gap-3'>
                     <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Income (month)</div>
                         <div class='text-xl font-bold text-emerald-400 font-mono'>{cur}{income:.2f}</div>
                         <div class='text-[10px] text-slate-500'>today +{cur}{today:.2f}</div>
+                    </div>
+                    <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Daily Target</div>
+                        <div class='text-xl font-bold {daily_cls} font-mono'>{cur}{daily_goal:.2f}</div>
+                        <div class='text-[10px] {daily_cls}'>{daily_txt}</div>
                     </div>
                     <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Income Goal</div>
@@ -338,11 +359,6 @@ class MoneyPlugin(LifeOSPlugin):
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Budget</div>
                         <div class='text-xl font-bold text-white font-mono'>{cur}{budget:.2f}</div>
                         <div class='text-[10px] text-slate-500'>{("over by " + cur + f"{_r2(burn - budget):.2f}") if budget and burn > budget else "set in config"}</div>
-                    </div>
-                    <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
-                        <div class='text-[10px] uppercase font-mono text-slate-400'>Rent</div>
-                        <div class='text-xl font-bold text-white font-mono'>{cur}{rent:.2f}</div>
-                        <div class='text-[10px] {rent_cls}'>{rent_txt}</div>
                     </div>
                 </div>
 
