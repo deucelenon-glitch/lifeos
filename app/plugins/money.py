@@ -59,6 +59,15 @@ class MoneyPlugin(LifeOSPlugin):
                 UNIQUE (alert_type, period)
             )
         """)
+        # Fixed monthly costs (rent, subs, insurance...) — the fixed part of the plan budget
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS fixed_costs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                amount REAL NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         row = conn.execute("SELECT COUNT(*) FROM money_config").fetchone()
         if not row or row[0] == 0:
             conn.execute("INSERT INTO money_config (rent_amount, rent_due_day, monthly_budget) VALUES (0, 1, 0)")
@@ -251,7 +260,10 @@ class MoneyPlugin(LifeOSPlugin):
                 entries = conn.execute(
                     "SELECT * FROM income_entries ORDER BY id DESC LIMIT 15"
                 ).fetchall()
+                # Fixed monthly costs (rent, subs, insurance...) — the fixed part of the plan
+                fixed_costs = conn.execute("SELECT * FROM fixed_costs ORDER BY id DESC").fetchall()
 
+            fixed_total = _r2(sum(float(f["amount"] or 0) for f in fixed_costs))
             rent = cfg["rent_amount"] or 0
             budget = cfg["monthly_budget"] or 0
             income_goal = cfg["income_goal"] or 0
@@ -268,12 +280,12 @@ class MoneyPlugin(LifeOSPlugin):
             except Exception:
                 pass
 
-            # Full plan = explicit budget + habit plan spend
-            full_plan = _r2(budget + habit_cost)
+            # Full plan = fixed costs + habit plan spend (the two budget types) + explicit budget cushion
+            full_plan = _r2(fixed_total + habit_cost + budget)
             plan_delta = _r2(full_plan - income_goal) if income_goal > 0 else 0.0
             plan_over = bool(income_goal > 0 and full_plan > income_goal)
             if plan_over:
-                plan_txt = f"⚠️ Plan €{full_plan:.2f} ({cur}{budget:.2f} budget + €{habit_cost:.2f} habits) > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
+                plan_txt = f"⚠️ Plan €{full_plan:.2f} (€{fixed_total:.2f} fixed + €{habit_cost:.2f} habits + €{budget:.2f} buffer) > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
                 plan_cls = "text-red-400"
             elif income_goal > 0:
                 plan_txt = f"✅ Plan OK — saving {cur}{_r2(income_goal - full_plan):.2f}/mo"
@@ -460,6 +472,32 @@ class MoneyPlugin(LifeOSPlugin):
                 </div>
 
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
+                    <h4 class='font-semibold text-white text-xs uppercase mb-3 mb-1'>🧾 Fixed costs <span class='text-slate-500'>(monthly)</span></h4>
+                    <div class='space-y-1.5'>
+                        {' '.join([f"<div class='flex justify-between items-center text-xs py-1.5'>"
+                                    f"<span class='text-slate-300'>{f['name']} <span class='text-slate-500'>{cur}{f['amount']:.2f}/mo</span></span>"
+                                    f"<span class='flex items-center space-x-1.5'>"
+                                    f"<button hx-post='/api/money/fixed-cost/{f['id']}/expense' hx-target='#money-area' hx-swap='outerHTML' class='bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-white px-2 py-1 rounded-lg text-[10px] font-medium border border-amber-500/30'>➕ Expense</button>"
+                                    f"<button hx-delete='/api/money/fixed-cost/{f['id']}' hx-target='#money-area' hx-swap='outerHTML' class='text-slate-600 hover:text-red-400 text-[10px] px-1'>✕</button>"
+                                    f"</span></div>" for f in fixed_costs] or ['<p class=\'text-xs text-slate-500 py-2\'>No fixed costs yet — add rent, subs, insurance below.</p>'])}
+                    </div>
+                    <form hx-post='/api/money/fixed-cost' hx-target='#money-area' hx-swap='outerHTML'
+                          class='flex gap-2 items-end mt-2.5'>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Name</label>
+                            <input type='text' name='name' placeholder='Netflix' required
+                                   class='w-32 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm'>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>{cur}/mo</label>
+                            <input type='number' step='0.01' name='amount' placeholder='12.99' required
+                                   class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm font-mono'>
+                        </div>
+                        <button type='submit' class='bg-dark-800 hover:bg-dark-700 text-emerald-400 font-medium px-3 py-1.5 rounded-lg text-xs'>+ Fixed cost</button>
+                    </form>
+                </div>
+
+                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <h4 class='font-semibold text-white text-xs uppercase mb-2'>Recent Income</h4>
                     {rows if rows else "<p class='text-xs text-slate-500 py-2'>No income logged yet — P2P profits auto-appear here with a 🛰️ tag.</p>"}
                 </div>
@@ -509,7 +547,7 @@ class MoneyPlugin(LifeOSPlugin):
             note: str = Form(""),
             source: str = Form("manual"),
             income_date: str = Form(""),
-        ):
+        ):            
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 from app.categories import ensure_category
@@ -550,6 +588,51 @@ class MoneyPlugin(LifeOSPlugin):
                         (rent_amount, rent_due_day, monthly_budget, income_goal),
                     )
             self.check_budget(notify=True)
+            return money_view(request)
+
+        @router.post("/fixed-cost", response_class=HTMLResponse)
+        def add_fixed_cost(
+            request: Request,
+            name: str = Form(...),
+            amount: float = Form(0),
+        ):
+            """Add a fixed monthly cost (rent, Netflix, insurance...) to the plan."""
+            from app.database import db as global_db
+            name = (name or "").strip()
+            if not name or amount <= 0:
+                return money_view(request)
+            with global_db.get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO fixed_costs (name, amount) VALUES (?, ?)",
+                    (name, amount),
+                )
+            self.check_budget(notify=True)
+            return money_view(request)
+
+        @router.delete("/fixed-cost/{cost_id}", response_class=HTMLResponse)
+        def delete_fixed_cost(request: Request, cost_id: int):
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                conn.execute("DELETE FROM fixed_costs WHERE id = ?", (cost_id,))
+            self.check_budget(notify=True)
+            return money_view(request)
+
+        @router.post("/fixed-cost/{cost_id}/expense", response_class=HTMLResponse)
+        def fixed_cost_to_expense(request: Request, cost_id: int):
+            """One-click: log this month's fixed cost as an expense."""
+            from app.database import db as global_db
+            from app.plugins.expenses import ExpensesPlugin
+            with global_db.get_connection() as conn:
+                f = conn.execute(
+                    "SELECT id, name, amount FROM fixed_costs WHERE id = ?", (cost_id,)
+                ).fetchone()
+            if not f or not f["amount"]:
+                return money_view(request)
+            ExpensesPlugin().create_expense_direct(
+                amount=float(f["amount"]),
+                category=f["name"],
+                note=f"fixed monthly: {f['name']}",
+            )
             return money_view(request)
 
         @router.get("/data")

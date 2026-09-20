@@ -55,6 +55,24 @@ class HabitsPlugin(LifeOSPlugin):
     def register_routes(self) -> APIRouter:
         router = APIRouter()
 
+        @router.post("/{habit_id}/expense-from", response_class=HTMLResponse)
+        def habit_to_expense(request: Request, habit_id: int):
+            """One-click: log one cost_per occurrence of a habit as an expense."""
+            from app.database import db as global_db
+            from app.plugins.expenses import ExpensesPlugin
+            with global_db.get_connection() as conn:
+                h = conn.execute(
+                    "SELECT id, name, cost_per FROM habits WHERE id = ?", (habit_id,)
+                ).fetchone()
+            if not h or not h["cost_per"]:
+                return habits_list_html(request)
+            ExpensesPlugin().create_expense_direct(
+                amount=float(h["cost_per"]),
+                category=h["name"],
+                note=f"habit: {h['name']}",
+            )
+            return habits_list_html(request)
+
         @router.get("/")
         def list_habits_api(request: Request):
             db = request.app.state.db if hasattr(request.app.state, "db") else None
@@ -115,6 +133,7 @@ class HabitsPlugin(LifeOSPlugin):
                                 <button type='submit' class='w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg'>Save plan</button>
                             </form>
                         </details>
+                        {'<button hx-post=\'/api/habits/' + str(h['id']) + '/expense-from\' hx-target=\'#habits-list\' class=\'bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-white px-2.5 py-1.5 rounded-lg text-xs font-medium transition border border-amber-500/30\' title=\'Log one ' + str(h['cost_per']) + ' as an expense\'>➕ Expense</button>' if h['cost_per'] else ''}
                         <button hx-post='/api/habits/{h['id']}/check' hx-target='#habits-list' class='bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-medium transition border border-emerald-500/30'>Check Today</button>
                         <button hx-delete='/api/habits/{h['id']}' hx-target='#habits-list' class='text-slate-500 hover:text-red-400 p-1.5 transition'>✕</button>
                     </div>

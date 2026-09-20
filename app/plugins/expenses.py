@@ -86,6 +86,28 @@ class ExpensesPlugin(LifeOSPlugin):
                 (refund, acc["id"]),
             )
 
+    def create_expense_direct(self, amount: float, category: str, note: str = "", expense_date: str = "", source_account: str = ""):
+        """Programmatic expense creation (used by habits one-click buttons).
+        Doesn't need HTTP request/response, just logs + deducts from capital."""
+        from app.database import db as global_db
+        date_val = (expense_date or "").strip() or "date('now')"
+        source = (source_account or "").strip() or None
+        with global_db.get_connection() as conn:
+            cur = conn.execute(
+                "INSERT INTO expenses (amount, category, note, expense_date, source_account) VALUES (?, ?, ?, ?, ?)",
+                (float(amount), category, note, date_val, source),
+            )
+            expense_id = cur.lastrowid
+        if source:
+            before, after = self._deduct_from_capital(float(amount), "EUR", source)
+            if before is not None and expense_id:
+                with global_db.get_connection() as conn:
+                    conn.execute(
+                        "UPDATE expenses SET balance_before = ?, balance_after = ? WHERE id = ?",
+                        (before, after, expense_id),
+                    )
+        return expense_id
+
     def register_routes(self) -> APIRouter:
         router = APIRouter()
 
