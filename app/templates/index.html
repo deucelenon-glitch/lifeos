@@ -176,9 +176,10 @@
                     <input type="text" name="name" placeholder="New habit (e.g. Gym)..."
                            required class="flex-1 min-w-0 bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                     <input type="number" name="target_streak" value="7" min="1" max="365"
-                           class="w-16 bg-dark-950 border border-dark-800 rounded-xl px-2 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm">
+                           class="w-16 bg-dark-950 border border-dark-800 rounded-xl px-2 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm" title="Target days">
                     <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-2.5 rounded-xl text-sm shrink-0">+ Add</button>
                 </form>
+                <p class="text-[11px] text-slate-500 mb-3">💡 Budget link — after adding, edit a habit's <b>×/week</b> and <b>€ each</b> below to compute its monthly cost into your Cashflow plan.</p>
             </div>
             <div id="habits-list" hx-get="/api/habits/list" hx-trigger="load">
                 <div class="text-slate-500 py-8 text-center text-sm">Loading habits…</div>

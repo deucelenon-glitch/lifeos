@@ -260,13 +260,23 @@ class MoneyPlugin(LifeOSPlugin):
             today_d = datetime.now().day
 
             # ---- plan feasibility: budget vs income goal ----
-            plan_delta = _r2(budget - income_goal) if income_goal > 0 else 0.0
-            plan_over = bool(income_goal > 0 and budget > income_goal)
+            # Habit-driven spend: Σ (weekly_target × cost_per) from the Habits tab
+            habit_cost = 0.0
+            try:
+                from app.plugins.habits import HabitsPlugin
+                habit_cost = HabitsPlugin().monthly_plan_cost()
+            except Exception:
+                pass
+
+            # Full plan = explicit budget + habit plan spend
+            full_plan = _r2(budget + habit_cost)
+            plan_delta = _r2(full_plan - income_goal) if income_goal > 0 else 0.0
+            plan_over = bool(income_goal > 0 and full_plan > income_goal)
             if plan_over:
-                plan_txt = f"⚠️ Budget {cur}{budget:.2f} > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
+                plan_txt = f"⚠️ Plan €{full_plan:.2f} ({cur}{budget:.2f} budget + €{habit_cost:.2f} habits) > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
                 plan_cls = "text-red-400"
             elif income_goal > 0:
-                plan_txt = f"✅ Plan OK — saving {cur}{_r2(income_goal - budget):.2f}/mo"
+                plan_txt = f"✅ Plan OK — saving {cur}{_r2(income_goal - full_plan):.2f}/mo"
                 plan_cls = "text-emerald-400"
             else:
                 plan_txt = "Set an income goal to check if the budget fits"

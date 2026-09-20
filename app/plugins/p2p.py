@@ -204,7 +204,7 @@ class P2PPlugin(LifeOSPlugin):
                 </tr>"""
 
             html = f"""
-            <div id='p2p-area' hx-get='/api/p2p/view' hx-trigger='load'>
+            <div id='p2p-area'>
             <div class='space-y-4'>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4 grid grid-cols-2 md:grid-cols-5 gap-3'>
                     <div>
