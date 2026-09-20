@@ -266,9 +266,14 @@
                         <input type="number" name="target_quantity" value="3" min="1"
                                class="bg-dark-950 border border-dark-800 rounded-xl px-1 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm">
                     </div>
-                    <div x-show="plannerTarget === 'expense'" x-cloak class="mt-2">
+                    <div x-show="plannerTarget === 'expense'" x-cloak class="mt-2 grid grid-cols-2 gap-2">
                         <input type="text" name="target_name" list="cat-expense-pick" placeholder="Category (e.g. Food)"
                                class="w-full bg-dark-950 border border-dark-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
+                        <div class="flex items-center gap-1 bg-dark-950 border border-dark-800 rounded-xl px-2 py-2 text-sm" title="€ each — cost per occurrence">
+                            <span class="text-[10px] uppercase font-mono text-slate-500">€ each</span>
+                            <input type="number" step="0.01" name="cost_per" value="0" min="0"
+                                   class="w-16 bg-transparent border-0 text-white text-center focus:outline-none font-mono">
+                        </div>
                         <datalist id="cat-expense-pick"></datalist>
                     </div>
                     <div x-show="plannerTarget === 'habit'" x-cloak class="mt-2">

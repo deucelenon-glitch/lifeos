@@ -27,6 +27,8 @@ class PlannerPlugin(LifeOSPlugin):
         cols = [r[1] for r in conn.execute("PRAGMA table_info(plans)").fetchall()]
         if "target_name" not in cols:
             conn.execute("ALTER TABLE plans ADD COLUMN target_name TEXT")
+        if "cost_per" not in cols:
+            conn.execute("ALTER TABLE plans ADD COLUMN cost_per REAL DEFAULT 0")
 
         from app.categories import init_categories_table
         init_categories_table(conn)
@@ -82,6 +84,28 @@ class PlannerPlugin(LifeOSPlugin):
             conn.commit()
             print(f"[planner] healed {changed} unlinked habit plan(s)")
 
+    def monthly_plan_cost(self) -> float:
+        """Σ of Budget € (expense) plan costs, normalized to monthly.
+        Each plan: cost_per per occurrence × frequency → monthly."""
+        from app.database import db as global_db
+        with global_db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT frequency, cost_per, target_quantity FROM plans WHERE target_type = 'expense'"
+            ).fetchall()
+        total = 0.0
+        for p in rows:
+            cp = float(p["cost_per"] or 0)
+            if cp <= 0:
+                continue
+            freq = p["frequency"] or "weekly"
+            if freq == "monthly":
+                total += cp
+            elif freq == "daily":
+                total += cp * 30.4
+            else:  # weekly
+                total += cp * 52 / 12
+        return round(total, 2)
+
     def register_routes(self) -> APIRouter:
         router = APIRouter()
 
@@ -124,7 +148,7 @@ class PlannerPlugin(LifeOSPlugin):
 
             tab_links = {
                 "habit": ("🔥", "Habits", "refreshTab('habits')"),
-                "expense": ("💰", "Expenses", "refreshTab('expenses')"),
+                "expense": ("💶", "Cashflow", "refreshTab('money')"),
                 "p2p": ("🛰️", "P2P", "refreshTab('p2p')"),
             }
 
@@ -159,7 +183,21 @@ class PlannerPlugin(LifeOSPlugin):
                     linked = f"""
                     <div class='flex items-center gap-1 mt-2'>
                         <span class='text-[10px] text-slate-500'><a href='#' @click.prevent="{tab_call}" class='hover:text-emerald-400'>open {tab_label.lower()} →</a></span>
+                        {'<button hx-post=\'/api/planner/' + str(p['id']) + '/expense\' hx-target=\'#planner-list\' class=\'bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-white px-2.5 py-1 rounded-lg text-[10px] font-medium border border-amber-500/30\' title=\'Log one occurrence at €' + (str(p['cost_per']) if p['cost_per'] else '') + '\'>➕ Expense</button>' if p['target_type'] == 'expense' and (p['cost_per'] or 0) else ''}
                     </div>"""
+
+                # Cost line for per-cost plans (like habits' Plan: x/wk · €y each)
+                cost_line = ""
+                if p['target_type'] == 'expense' and (p['cost_per'] or 0):
+                    freq_notes = {'weekly': '× 52/12 →', 'monthly': '× 1 →'}.get(p['frequency'], '× 4.33 →')
+                    if p['frequency'] == 'monthly':
+                        monthly = float(p['cost_per'])
+                    elif p['frequency'] == 'daily':
+                        monthly = float(p['cost_per']) * 30.4
+                    else:
+                        monthly = float(p['cost_per']) * 52 / 12
+                    cost_line = (f"<p class='text-xs text-slate-500 mt-0.5'>Plan cost: "
+                                 f"€{p['cost_per']:.2f} each · {p['frequency']} → <span class='text-emerald-400 font-mono font-bold'>€{monthly:.2f}/mo</span></p>")
 
                 cards.append(f"""
                 <div class='bg-dark-900 border border-dark-700 rounded-xl p-4'>
@@ -167,6 +205,7 @@ class PlannerPlugin(LifeOSPlugin):
                         <div>
                             <h4 class='font-semibold text-white text-sm'>{icon} {p['goal_label']}</h4>
                             <p class='text-xs text-slate-400 mt-0.5'><span class='uppercase font-mono'>{p['target_type']}</span> • {p['frequency']}{f" • <span class='text-slate-300'>{p['target_name']}</span>" if p['target_name'] else ""}</p>
+                            {cost_line}
                         </div>
                         <button hx-delete='/api/planner/{p['id']}' hx-target='#planner-list' class='text-slate-500 hover:text-red-400 p-1'>✕</button>
                     </div>
@@ -195,6 +234,7 @@ class PlannerPlugin(LifeOSPlugin):
             target_name: str = Form(""),
             frequency: str = Form("weekly"),
             target_quantity: float = Form(1),
+            cost_per: float = Form(0),
         ):
             from app.database import db as global_db
             if target_type == "expense" and target_name:
@@ -224,9 +264,27 @@ class PlannerPlugin(LifeOSPlugin):
                         conn.commit()
             with global_db.get_connection() as conn:
                 conn.execute(
-                    "INSERT INTO plans (target_type, target_id, target_name, goal_label, frequency, target_quantity) VALUES (?, ?, ?, ?, ?, ?)",
-                    (target_type, target_id, target_name, goal_label, frequency, target_quantity),
+                    "INSERT INTO plans (target_type, target_id, target_name, goal_label, frequency, target_quantity, cost_per) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (target_type, target_id, target_name, goal_label, frequency, target_quantity, cost_per),
                 )
+            return planner_view(request)
+
+        @router.post("/{plan_id}/expense", response_class=HTMLResponse)
+        def plan_to_expense(request: Request, plan_id: int):
+            """One-click: log one occurrence of a Budget € plan at its cost_per."""
+            from app.database import db as global_db
+            from app.plugins.expenses import ExpensesPlugin
+            with global_db.get_connection() as conn:
+                p = conn.execute(
+                    "SELECT * FROM plans WHERE id = ?", (plan_id,)
+                ).fetchone()
+            if not p or p["target_type"] != "expense" or not (p["cost_per"] or 0):
+                return planner_view(request)
+            ExpensesPlugin().create_expense_direct(
+                amount=float(p["cost_per"]),
+                category=p["target_name"] or p["goal_label"],
+                note=f"plan: {p['goal_label']}",
+            )
             return planner_view(request)
 
         @router.delete("/{plan_id}", response_class=HTMLResponse)

@@ -280,12 +280,20 @@ class MoneyPlugin(LifeOSPlugin):
             except Exception:
                 pass
 
-            # Full plan = fixed costs + habit plan spend (the two budget types) + explicit budget cushion
-            full_plan = _r2(fixed_total + habit_cost + budget)
+            # Budget € plans: Σ of per-occurrence costs normalized to monthly
+            plan_cost = 0.0
+            try:
+                from app.plugins.planner import PlannerPlugin
+                plan_cost = PlannerPlugin().monthly_plan_cost()
+            except Exception:
+                pass
+
+            # Full plan = fixed costs + habit plan spend + budget € plan spend + explicit budget cushion
+            full_plan = _r2(fixed_total + habit_cost + plan_cost + budget)
             plan_delta = _r2(full_plan - income_goal) if income_goal > 0 else 0.0
             plan_over = bool(income_goal > 0 and full_plan > income_goal)
             if plan_over:
-                plan_txt = f"⚠️ Plan €{full_plan:.2f} (€{fixed_total:.2f} fixed + €{habit_cost:.2f} habits + €{budget:.2f} buffer) > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
+                plan_txt = f"⚠️ Plan €{full_plan:.2f} (€{fixed_total:.2f} fixed + €{habit_cost:.2f} habits + €{plan_cost:.2f} plans + €{budget:.2f} buffer) > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
                 plan_cls = "text-red-400"
             elif income_goal > 0:
                 plan_txt = f"✅ Plan OK — saving {cur}{_r2(income_goal - full_plan):.2f}/mo"
