@@ -1,0 +1,156 @@
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from pathlib import Path
+from app.config import settings
+from app.plugins.base import LifeOSPlugin
+from datetime import datetime
+
+class WebAppPlugin(LifeOSPlugin):
+    @property
+    def name(self) -> str:
+        return "webapp"
+
+    def init_tables(self, conn):
+        pass
+
+    def register_routes(self) -> APIRouter:
+        router = APIRouter()
+        templates_dir = settings.BASE_DIR / "app" / "templates"
+        templates = Jinja2Templates(directory=str(templates_dir))
+
+        @router.get("/api/dashboard", response_class=HTMLResponse)
+        def dashboard(request: Request):
+            """Server-composed stat cards for the home screen — no JS needed."""
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                # Habits
+                habit_count = conn.execute("SELECT COUNT(*) c FROM habits").fetchone()["c"]
+                streak_total = conn.execute(
+                    "SELECT COALESCE(SUM(s), 0) FROM (SELECT COUNT(DISTINCT completed_date) s FROM habit_logs GROUP BY habit_id)"
+                ).fetchone()[0] or 0
+                best_habit = conn.execute("""
+                    SELECT h.name, COUNT(DISTINCT hl.completed_date) streak
+                    FROM habits h LEFT JOIN habit_logs hl ON hl.habit_id = h.id
+                    GROUP BY h.id ORDER BY streak DESC LIMIT 1
+                """).fetchone()
+
+                # Expenses this month
+                burn = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) FROM expenses WHERE strftime('%Y-%m', expense_date) = strftime('%Y-%m', 'now')"
+                ).fetchone()[0] or 0
+                expense_count = conn.execute("SELECT COUNT(*) c FROM expenses").fetchone()["c"]
+
+                # Plans
+                plan_count = conn.execute("SELECT COUNT(*) c FROM plans").fetchone()["c"]
+
+                # P2P
+                p2p = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
+                last_order = conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT 1").fetchone()
+                if p2p and last_order:
+                    try:
+                        created = datetime.fromisoformat(str(last_order["created_at"]).replace("Z", ""))
+                        mins_ago = int((datetime.now() - created).total_seconds() // 60)
+                        p2p_sub = f"{mins_ago}m ago"
+                    except (ValueError, TypeError):
+                        p2p_sub = "logged"
+                elif p2p:
+                    p2p_sub = "no orders yet"
+                else:
+                    p2p_sub = "—"
+                p2p_on = bool(p2p and p2p["enabled"])
+
+                # Telegram
+                tg = conn.execute("SELECT COUNT(*) c FROM telegram_config").fetchone()["c"]
+
+                # Category breakdown — this month's spend per expense category
+                cat_rows = conn.execute("""
+                    SELECT category, COALESCE(SUM(amount),0) total, COUNT(*) n
+                    FROM expenses
+                    WHERE strftime('%Y-%m', expense_date) = strftime('%Y-%m', 'now')
+                    GROUP BY category ORDER BY total DESC
+                """).fetchall()
+
+                # Capital: EUR + USD balances across accounts, combined total at live rate
+                acc_rows = conn.execute(
+                    "SELECT balance, currency FROM capital_accounts"
+                ).fetchall()
+                cap_eur = sum((r["balance"] or 0) for r in acc_rows if r["currency"] == "EUR")
+                cap_usd = sum((r["balance"] or 0) for r in acc_rows if r["currency"] == "USD")
+                try:
+                    from app.plugins.capital import _fx_eur_to_usd
+                    eur2usd = _fx_eur_to_usd()
+                except Exception:
+                    eur2usd = 1.08
+                cap_total_eur = cap_eur + (cap_usd / eur2usd if eur2usd else cap_usd)
+                cap_sub = f"€{cap_eur:.0f} + ${cap_usd:.0f} @ {eur2usd:.3f}" if acc_rows else "no accounts yet"
+
+            card = lambda title, value, sub, accent="text-emerald-400", tag="" : f"""
+            <div class='bg-dark-800/50 border border-dark-700 rounded-2xl p-4 flex flex-col gap-1'>
+                <span class='text-[10px] uppercase font-mono text-slate-400'>{title} {tag}</span>
+                <span class='text-2xl font-extrabold {accent}'>{value}</span>
+                <span class='text-[11px] text-slate-500'>{sub}</span>
+            </div>"""
+
+            best = f"{best_habit['name']} · {best_habit['streak']}d" if best_habit and best_habit["streak"] else "track one below"
+
+            # Second row: per-category spend chips (dynamic link: categories live in expenses)
+            cat_chips = "".join(
+                f"<div class='bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 flex justify-between'>"
+                f"<span class='text-xs text-slate-300 font-mono uppercase'>{r['category']}</span>"
+                f"<span class='text-xs font-mono text-white'>€{r['total']:.2f} <span class='text-slate-500'>×{r['n']}</span></span></div>"
+                for r in cat_rows
+            ) or "<div class='text-xs text-slate-500 py-3'>Log expenses to see per-category spend.</div>"
+
+            return card("🔥 Habits", str(habit_count), best, "text-white") + card(
+                "💰 Burn (month)", f"€{burn:.2f}", f"{expense_count} logged", "text-white"
+            ) + card(
+                "🗓️ Plans", str(plan_count), "goals active", "text-white"
+            ) + card(
+                "🛰️ P2P", "ON" if p2p_on else "OFF", p2p_sub, "text-emerald-400" if p2p_on else "text-slate-400"
+            ) + card(
+                "🤖 Bot", "Linked" if tg else "Unlinked", "telegram config", "text-emerald-400" if tg else "text-slate-400"
+            ) + card(
+                "🏦 Capital", f"€{cap_total_eur:,.0f}", cap_sub, "text-emerald-400"
+            ) + f"""
+            <div class='bg-dark-800/50 border border-dark-700 rounded-2xl p-4'>
+                <span class='text-[10px] uppercase font-mono text-slate-400'>🧩 Spend by Category (month)</span>
+                <div class='space-y-1.5 mt-2'>{cat_chips}</div>
+            </div>"""
+
+        @router.get("/", response_class=HTMLResponse)
+        def serve_dashboard(request: Request):
+            # Dynamically collect menu entries from every loaded plugin.
+            # New plugins auto-appear in the drawer, below existing ones.
+            entries = []
+            app = request.app
+            plugins = getattr(app.state, "plugins", {})
+            for name in ["habits", "expenses", "planner", "p2p", "money", "capital", "telegram"]:
+                p = plugins.get(name)
+                if p is None:
+                    continue
+                m = p.menu()
+                for entry in (m if isinstance(m, list) else [m]):
+                    entry["id"] = entry.get("id", name)
+                    entries.append(entry)
+            # Any extra plugins not in the preferred order get appended after
+            for name, p in plugins.items():
+                if name in {"habits", "expenses", "planner", "p2p", "money", "capital", "telegram", "webapp"}:
+                    continue
+                m = p.menu()
+                for entry in (m if isinstance(m, list) else [m]):
+                    entry["id"] = entry.get("id", name)
+                    entries.append(entry)
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                habits = conn.execute("SELECT id, name FROM habits ORDER BY name").fetchall()
+            return templates.TemplateResponse(
+                request,
+                "index.html",
+                {"menu_entries": entries, "habits": habits},
+            )
+
+        return router
+
+    def get_dashboard_widgets(self) -> list:
+        return []

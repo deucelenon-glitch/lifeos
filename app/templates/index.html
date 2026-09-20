@@ -147,8 +147,7 @@
                 <p class="text-xs text-slate-400">All your trackers, one screen.</p>
             </div>
             <!-- Stat cards — server-composed, no JS -->
-            <div id="dash-cards" class="grid grid-cols-2 md:grid-cols-5 gap-3"
-                 hx-get="/api/dashboard" hx-trigger="load">
+            <div id="dash-cards" hx-get="/api/dashboard" hx-trigger="load" hx-swap="outerHTML">
                 <div class="bg-dark-950 border border-dark-800 rounded-2xl p-5"><div class="text-sm text-slate-500">…</div></div>
             </div>
             <!-- Quick actions -->

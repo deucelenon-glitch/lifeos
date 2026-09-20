@@ -68,30 +68,6 @@ class MoneyPlugin(LifeOSPlugin):
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # UNIFIED monthly budget items — rent, subs, food, anything. Σ = monthly budget goal.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS monthly_budget_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                amount REAL NOT NULL DEFAULT 0,
-                due_day INTEGER DEFAULT NULL,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        # One-time migration: fold legacy fixed_costs + money_config.rent into monthly_budget_items
-        try:
-            has_items = conn.execute("SELECT COUNT(*) c FROM monthly_budget_items").fetchone()["c"]
-            if has_items == 0:
-                for fc in conn.execute("SELECT name, amount FROM fixed_costs").fetchall():
-                    conn.execute("INSERT INTO monthly_budget_items (name, amount) VALUES (?, ?)", (fc["name"], fc["amount"]))
-                mcfg = conn.execute("SELECT rent_amount, rent_due_day FROM money_config ORDER BY id DESC LIMIT 1").fetchone()
-                if mcfg and (mcfg["rent_amount"] or 0) > 0:
-                    conn.execute(
-                        "INSERT INTO monthly_budget_items (name, amount, due_day) VALUES ('Rent', ?, ?)",
-                        (mcfg["rent_amount"], mcfg["rent_due_day"] or 1),
-                    )
-        except Exception as e:
-            print(f"[money] budget-items migration skipped: {e}")
         row = conn.execute("SELECT COUNT(*) FROM money_config").fetchone()
         if not row or row[0] == 0:
             conn.execute("INSERT INTO money_config (rent_amount, rent_due_day, monthly_budget) VALUES (0, 1, 0)")
@@ -108,25 +84,6 @@ class MoneyPlugin(LifeOSPlugin):
     # ------------------------------------------------------------------
     def _cfg(self, conn) -> sqlite3.Row:
         return conn.execute("SELECT * FROM money_config ORDER BY id DESC LIMIT 1").fetchone()
-
-    # ---- unified monthly budget items ----
-    def _budget_items(self, conn):
-        return conn.execute("SELECT * FROM monthly_budget_items ORDER BY id ASC").fetchall()
-
-    def _budget_total(self, conn) -> float:
-        row = conn.execute("SELECT COALESCE(SUM(amount),0) FROM monthly_budget_items").fetchone()
-        return _r2(row[0])
-
-    def _rent_item(self, conn):
-        """Rent = item named Rent (any casing), else first item with a due day."""
-        items = self._budget_items(conn)
-        for it in items:
-            if (it["name"] or "").strip().lower() == "rent":
-                return it
-        for it in items:
-            if it["due_day"]:
-                return it
-        return None
 
     def _month(self) -> str:
         return datetime.now().strftime("%Y-%m")
@@ -246,10 +203,9 @@ class MoneyPlugin(LifeOSPlugin):
             cfg = self._cfg(conn)
             burn = self._month_burn(conn)
             income = self._month_income(conn)
-            budget = self._budget_total(conn)          # Σ monthly_budget_items — auto-calculated
-            rent_item = self._rent_item(conn)
-            rent = float(rent_item["amount"] or 0) if rent_item else 0
-            due_day = int(rent_item["due_day"] or 1) if rent_item else 1
+            budget = cfg["monthly_budget"] or 0
+            rent = cfg["rent_amount"] or 0
+            due_day = cfg["rent_due_day"] or 1
             cur = cfg["currency"] or "€"
             state = self._budget_state(burn, budget)
             income_goal = cfg["income_goal"] or 0
@@ -276,15 +232,11 @@ class MoneyPlugin(LifeOSPlugin):
                 period = self._month()
                 msgs = []
 
-                # due-day items (rent, subs...) — once per month each
-                for bit in self._budget_items(conn):
-                    dday = bit["due_day"]
-                    if not dday or (bit["amount"] or 0) <= 0:
-                        continue
-                    if today_d >= int(dday) and not self._alert_sent(conn, "due_day", f"{period}:{bit['id']}"):
-                        msg = f"📌 {bit['name']} {cur}{float(bit['amount']):.2f} is due (day {dday}) — pay it."
-                        self._mark_alert(conn, "due_day", f"{period}:{bit['id']}", msg)
-                        msgs.append(msg)
+                # rent due — once per month
+                if result["rent_due"] and not self._alert_sent(conn, "rent_due", period):
+                    msg = f"🏠 Rent {cur}{rent:.2f} is due (day {due_day}) — pay it."
+                    self._mark_alert(conn, "rent_due", period, msg)
+                    msgs.append(msg)
 
                 # budget state flip — over / under (praise) / warn
                 prev = cfg["alert_state"]
@@ -331,15 +283,15 @@ class MoneyPlugin(LifeOSPlugin):
                 entries = conn.execute(
                     "SELECT * FROM income_entries ORDER BY id DESC LIMIT 15"
                 ).fetchall()
-                # Unified monthly budget items (rent, food, subs...) — Σ = monthly budget goal
-                budget_items = self._budget_items(conn)
-                budget = self._budget_total(conn)
-                rent_item = self._rent_item(conn)
-                rent = float(rent_item["amount"] or 0) if rent_item else 0
-                due_day = int(rent_item["due_day"] or 1) if rent_item else 1
+                # Fixed monthly costs (rent, subs, insurance...) — the fixed part of the plan
+                fixed_costs = conn.execute("SELECT * FROM fixed_costs ORDER BY id DESC").fetchall()
 
+            fixed_total = _r2(sum(float(f["amount"] or 0) for f in fixed_costs))
+            rent = cfg["rent_amount"] or 0
+            budget = cfg["monthly_budget"] or 0
             income_goal = cfg["income_goal"] or 0
             daily_budget = cfg["daily_budget"] or 0
+            due_day = cfg["rent_due_day"] or 1
             cur = cfg["currency"] or "€"
             today_d = datetime.now().day
 
@@ -360,12 +312,12 @@ class MoneyPlugin(LifeOSPlugin):
             except Exception:
                 pass
 
-            # Full plan = unified monthly budget (Σ items) + habit spend + budget € plan spend
-            full_plan = _r2(budget + habit_cost + plan_cost)
+            # Full plan = fixed costs + habit plan spend + budget € plan spend + explicit budget cushion
+            full_plan = _r2(fixed_total + habit_cost + plan_cost + budget)
             plan_delta = _r2(full_plan - income_goal) if income_goal > 0 else 0.0
             plan_over = bool(income_goal > 0 and full_plan > income_goal)
             if plan_over:
-                plan_txt = f"⚠️ Plan €{full_plan:.2f} (€{budget:.2f} monthly budget + €{habit_cost:.2f} habits + €{plan_cost:.2f} plans) > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
+                plan_txt = f"⚠️ Plan €{full_plan:.2f} (€{fixed_total:.2f} fixed + €{habit_cost:.2f} habits + €{plan_cost:.2f} plans + €{budget:.2f} buffer) > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
                 plan_cls = "text-red-400"
             elif income_goal > 0:
                 plan_txt = f"✅ Plan OK — saving {cur}{_r2(income_goal - full_plan):.2f}/mo"
@@ -605,35 +557,28 @@ class MoneyPlugin(LifeOSPlugin):
                 </div>
 
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <h4 class='font-semibold text-white text-xs uppercase mb-3 mb-1'>📋 Monthly Budget <span class='text-slate-500'>(goal = sum)</span></h4>
+                    <h4 class='font-semibold text-white text-xs uppercase mb-3 mb-1'>🧾 Fixed costs <span class='text-slate-500'>(monthly)</span></h4>
                     <div class='space-y-1.5'>
                         {' '.join([f"<div class='flex justify-between items-center text-xs py-1.5'>"
-                                    f"<span class='text-slate-300'>{b['name']} <span class='text-slate-500'>{cur}{b['amount']:.2f}/mo</span>"
-                                    + (f" <span class='text-amber-400 border border-amber-500/30 rounded-md px-1.5 text-[10px]'>due day {b['due_day']}</span>" if b['due_day'] else "")
-                                    + f"</span>"
+                                    f"<span class='text-slate-300'>{f['name']} <span class='text-slate-500'>{cur}{f['amount']:.2f}/mo</span></span>"
                                     f"<span class='flex items-center space-x-1.5'>"
-                                    f"<button hx-post='/api/money/budget-item/{b['id']}/expense' hx-target='#money-area' hx-swap='outerHTML' class='bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-white px-2 py-1 rounded-lg text-[10px] font-medium border border-amber-500/30'>➕ Expense</button>"
-                                    f"<button hx-delete='/api/money/budget-item/{b['id']}' hx-target='#money-area' hx-swap='outerHTML' class='text-slate-600 hover:text-red-400 text-[10px] px-1'>✕</button>"
-                                    f"</span></div>" for b in budget_items] or ['<p class=\'text-xs text-slate-500 py-2\'>No budget items yet — add rent, food, subs below.</p>'])}
+                                    f"<button hx-post='/api/money/fixed-cost/{f['id']}/expense' hx-target='#money-area' hx-swap='outerHTML' class='bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-white px-2 py-1 rounded-lg text-[10px] font-medium border border-amber-500/30'>➕ Expense</button>"
+                                    f"<button hx-delete='/api/money/fixed-cost/{f['id']}' hx-target='#money-area' hx-swap='outerHTML' class='text-slate-600 hover:text-red-400 text-[10px] px-1'>✕</button>"
+                                    f"</span></div>" for f in fixed_costs] or ['<p class=\'text-xs text-slate-500 py-2\'>No fixed costs yet — add rent, subs, insurance below.</p>'])}
                     </div>
-                    <form hx-post='/api/money/budget-item' hx-target='#money-area' hx-swap='outerHTML'
+                    <form hx-post='/api/money/fixed-cost' hx-target='#money-area' hx-swap='outerHTML'
                           class='flex gap-2 items-end mt-2.5'>
                         <div>
                             <label class='text-[10px] uppercase font-mono text-slate-400'>Name</label>
-                            <input type='text' name='name' placeholder='Food' required
+                            <input type='text' name='name' placeholder='Netflix' required
                                    class='w-32 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm'>
                         </div>
                         <div>
                             <label class='text-[10px] uppercase font-mono text-slate-400'>{cur}/mo</label>
-                            <input type='number' step='0.01' name='amount' placeholder='150' required
+                            <input type='number' step='0.01' name='amount' placeholder='12.99' required
                                    class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm font-mono'>
                         </div>
-                        <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Due day</label>
-                            <input type='number' min='1' max='31' name='due_day' placeholder='optional'
-                                   class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm font-mono'>
-                        </div>
-                        <button type='submit' class='bg-dark-800 hover:bg-dark-700 text-emerald-400 font-medium px-3 py-1.5 rounded-lg text-xs'>➕ Add item</button>
+                        <button type='submit' class='bg-dark-800 hover:bg-dark-700 text-emerald-400 font-medium px-3 py-1.5 rounded-lg text-xs'>+ Fixed cost</button>
                     </form>
                 </div>
 
@@ -643,10 +588,25 @@ class MoneyPlugin(LifeOSPlugin):
                 </div>
 
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>⚙️ Config — income & alerts</h4>
+                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>⚙️ Config — rent & budget</h4>
                     <form hx-post='/api/money/config' hx-target='#money-area' hx-swap='outerHTML'
                           @submit="toast = 'Config saved ✓ — budget re-evaluated'"
-                          class='grid grid-cols-2 md:grid-cols-5 gap-2 items-end'>
+                          class='grid grid-cols-2 md:grid-cols-6 gap-2 items-end'>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Rent {cur}/mo</label>
+                            <input type='number' step='0.01' name='rent_amount' value='{rent:.2f}'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Due day</label>
+                            <input type='number' min='1' max='31' name='rent_due_day' value='{due_day}'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Monthly budget {cur}</label>
+                            <input type='number' step='0.01' name='monthly_budget' value='{budget:.2f}'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                        </div>
                         <div>
                             <label class='text-[10px] uppercase font-mono text-slate-400'>Daily budget {cur} <span class='text-slate-600'>(0=auto)</span></label>
                             <input type='number' step='0.01' name='daily_budget' value='{daily_budget:.2f}'
@@ -663,7 +623,7 @@ class MoneyPlugin(LifeOSPlugin):
                         </div>
                         <button type='submit' class='w-full bg-dark-800 hover:bg-dark-700 text-emerald-400 font-medium py-2 rounded-xl text-sm'>Save</button>
                     </form>
-                    <p class='text-[10px] text-slate-500 mt-1.5 font-mono'>monthly budget goal = Σ of 📋 Monthly Budget items above · alerts: 🔴 over-budget · 🟠 80% warn · 🟢 praise when back under — pushed via Termux/Telegram by the worker</p>
+                    <p class='text-[10px] text-slate-500 mt-1.5 font-mono'>alerts: 🔴 over-budget · 🟠 80% warn · 🟢 praise when back under — pushed via Termux/Telegram by the worker</p>
                 </div>
             </div>
             </div>
@@ -699,70 +659,70 @@ class MoneyPlugin(LifeOSPlugin):
         @router.post("/config", response_class=HTMLResponse)
         def save_config(
             request: Request,
+            rent_amount: float = Form(0),
+            rent_due_day: int = Form(1),
+            monthly_budget: float = Form(0),
             income_goal: float = Form(0),
             daily_budget: float = Form(0),
         ):
-            """Save income goal + daily budget only.
-            Monthly budget is now auto-calculated from monthly_budget_items."""
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 cfg = self._cfg(conn)
                 if cfg:
                     conn.execute(
-                        "UPDATE money_config SET income_goal = ?, daily_budget = ? WHERE id = ?",
-                        (income_goal, daily_budget, cfg["id"]),
+                        "UPDATE money_config SET rent_amount = ?, rent_due_day = ?, monthly_budget = ?, income_goal = ?, daily_budget = ? WHERE id = ?",
+                        (rent_amount, rent_due_day, monthly_budget, income_goal, daily_budget, cfg["id"]),
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO money_config (income_goal, daily_budget) VALUES (?, ?)",
-                        (income_goal, daily_budget),
+                        "INSERT INTO money_config (rent_amount, rent_due_day, monthly_budget, income_goal, daily_budget) VALUES (?, ?, ?, ?, ?)",
+                        (rent_amount, rent_due_day, monthly_budget, income_goal, daily_budget),
                     )
             self.check_budget(notify=True)
             return money_view(request)
 
-        @router.post("/budget-item", response_class=HTMLResponse)
-        def add_budget_item(
+        @router.post("/fixed-cost", response_class=HTMLResponse)
+        def add_fixed_cost(
             request: Request,
             name: str = Form(...),
             amount: float = Form(0),
-            due_day: int = Form(None),
         ):
-            """Add a monthly budget item (rent, food, subs...) — Σ = monthly budget goal."""
+            """Add a fixed monthly cost (rent, Netflix, insurance...) to the plan."""
             from app.database import db as global_db
             name = (name or "").strip()
             if not name or amount <= 0:
                 return money_view(request)
             with global_db.get_connection() as conn:
                 conn.execute(
-                    "INSERT INTO monthly_budget_items (name, amount, due_day) VALUES (?, ?, ?)",
-                    (name, amount, due_day if due_day else None),
+                    "INSERT INTO fixed_costs (name, amount) VALUES (?, ?)",
+                    (name, amount),
                 )
             self.check_budget(notify=True)
             return money_view(request)
 
-        @router.delete("/budget-item/{item_id}", response_class=HTMLResponse)
-        def delete_budget_item(request: Request, item_id: int):
+        @router.delete("/fixed-cost/{cost_id}", response_class=HTMLResponse)
+        def delete_fixed_cost(request: Request, cost_id: int):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
-                conn.execute("DELETE FROM monthly_budget_items WHERE id = ?", (item_id,))
+                conn.execute("DELETE FROM fixed_costs WHERE id = ?", (cost_id,))
             self.check_budget(notify=True)
             return money_view(request)
 
-        @router.post("/budget-item/{item_id}/expense", response_class=HTMLResponse)
-        def budget_item_to_expense(request: Request, item_id: int):
-            """One-click: log this month's budget item as an expense."""
+        @router.post("/fixed-cost/{cost_id}/expense", response_class=HTMLResponse)
+        def fixed_cost_to_expense(request: Request, cost_id: int):
+            """One-click: log this month's fixed cost as an expense."""
             from app.database import db as global_db
             from app.plugins.expenses import ExpensesPlugin
             with global_db.get_connection() as conn:
-                b = conn.execute(
-                    "SELECT id, name, amount FROM monthly_budget_items WHERE id = ?", (item_id,)
+                f = conn.execute(
+                    "SELECT id, name, amount FROM fixed_costs WHERE id = ?", (cost_id,)
                 ).fetchone()
-            if not b or not b["amount"]:
+            if not f or not f["amount"]:
                 return money_view(request)
             ExpensesPlugin().create_expense_direct(
-                amount=float(b["amount"]),
-                category=b["name"],
-                note=f"budget item: {b['name']}",
+                amount=float(f["amount"]),
+                category=f["name"],
+                note=f"fixed monthly: {f['name']}",
             )
             return money_view(request)
 
