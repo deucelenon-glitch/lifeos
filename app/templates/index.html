@@ -31,27 +31,37 @@
     </style>
 </head>
 <body class="bg-dark-950 text-slate-100 min-h-screen font-sans antialiased pb-20"
-      x-data="{ activeTab: 'home', toast: null, plannerTarget: 'habit',
-                 refreshTab(tab) {
-                   this.activeTab = tab;
-                   // Re-pull the target list so data logged from the Planner
-                   // (or anywhere else) shows up the moment you open the tab.
-                   const map = { habits: '#habits-list', expenses: '#expenses-list',
-                                 money: '#money-area', planner: '#planner-list', p2p: '#p2p-area',
-                                 capital: '#capital-area', termux: '#termux-area' };
-                   const sel = map[tab];
-                   if (sel) {
-                     const el = document.querySelector(sel);
-                     if (el && window.htmx) htmx.trigger(el, 'load');
-                     else if (el) {
-                       // Fallback re-fetch: strip & re-add the hx-get target so htmx re-fires
-                       const url = el.getAttribute('hx-get');
-                       if (url && window.htmx) htmx.ajax('GET', url, { target: el, swap: 'outerHTML' });
-                     }
-                   }
-                 } }}">
+      x-data="{
+        activeTab: 'home',
+        toast: null,
+        plannerTarget: 'habit',
+        refreshTab(tab) {
+          this.activeTab = tab;
+          const map = {
+            habits: '#habits-list',
+            expenses: '#expenses-list',
+            money: '#money-area',
+            planner: '#planner-list',
+            p2p: '#p2p-area',
+            capital: '#capital-area',
+            termux: '#termux-area'
+          };
+          const sel = map[tab];
+          if (sel) {
+            const el = document.querySelector(sel);
+            if (el && window.htmx) {
+              htmx.trigger(el, 'load');
+            } else if (el) {
+              const url = el.getAttribute('hx-get');
+              if (url && window.htmx) {
+                htmx.ajax('GET', url, { target: el, swap: 'outerHTML' });
+              }
+            }
+          }
+        }
+      }">
 
-    <!-- ================= HEADER ================= -->
+<!-- ================= HEADER ================= -->
     <header class="border-b border-dark-700 bg-dark-900/90 backdrop-blur sticky top-0 z-50">
         <div class="max-w-6xl mx-auto px-4 py-2.5 flex items-center justify-between">
             <div class="flex items-center space-x-2.5">
