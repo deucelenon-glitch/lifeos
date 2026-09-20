@@ -172,14 +172,24 @@
             <div class="bg-dark-900 border border-dark-800 rounded-2xl p-5">
                 <form hx-post="/api/habits/" hx-target="#habits-list" hx-swap="outerHTML"
                       @submit="toast = 'Habit added ✓'"
-                      class="flex gap-2 mb-4">
+                      class="flex gap-2 mb-4 flex-wrap">
                     <input type="text" name="name" placeholder="New habit (e.g. Gym)..."
                            required class="flex-1 min-w-0 bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                     <input type="number" name="target_streak" value="7" min="1" max="365"
                            class="w-16 bg-dark-950 border border-dark-800 rounded-xl px-2 py-2.5 text-white text-center focus:outline-none focus:border-emerald-500 text-sm" title="Target days">
+                    <div class="flex items-center gap-1 bg-dark-950 border border-dark-800 rounded-xl px-2 py-2 text-sm" title="×/week — how often you plan to do it">
+                        <span class="text-[10px] uppercase font-mono text-slate-500">×/wk</span>
+                        <input type="number" name="weekly_target" value="0" min="0" max="28"
+                               class="w-12 bg-transparent border-0 text-white text-center focus:outline-none font-mono">
+                    </div>
+                    <div class="flex items-center gap-1 bg-dark-950 border border-dark-800 rounded-xl px-2 py-2 text-sm" title="€ each — cost per occurrence">
+                        <span class="text-[10px] uppercase font-mono text-slate-500">€ each</span>
+                        <input type="number" step="0.01" name="cost_per" value="0" min="0"
+                               class="w-14 bg-transparent border-0 text-white text-center focus:outline-none font-mono">
+                    </div>
                     <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3.5 py-2.5 rounded-xl text-sm shrink-0">+ Add</button>
                 </form>
-                <p class="text-[11px] text-slate-500 mb-3">💡 Budget link — after adding, edit a habit's <b>×/week</b> and <b>€ each</b> below to compute its monthly cost into your Cashflow plan.</p>
+                <p class="text-[11px] text-slate-500 mb-3">💡 Budget link — set <b>×/week</b> and <b>€ each</b> here (or edit via <b>⚙️ plan</b> later); the app computes the monthly cost into your Cashflow plan.</p>
             </div>
             <div id="habits-list" hx-get="/api/habits/list" hx-trigger="load">
                 <div class="text-slate-500 py-8 text-center text-sm">Loading habits…</div>
