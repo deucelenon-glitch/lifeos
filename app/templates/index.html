@@ -37,14 +37,19 @@
                    // Re-pull the target list so data logged from the Planner
                    // (or anywhere else) shows up the moment you open the tab.
                    const map = { habits: '#habits-list', expenses: '#expenses-list',
-                                 money: '#money-area', planner: '#planner-list', p2p: '#p2p-area', capital: '#capital-area' };
+                                 money: '#money-area', planner: '#planner-list', p2p: '#p2p-area',
+                                 capital: '#capital-area', termux: '#termux-area' };
                    const sel = map[tab];
                    if (sel) {
                      const el = document.querySelector(sel);
-                     if (el && el.htmx) htmx.trigger(el, 'load');
-                     else if (el) { /* fallback: re-fetch */ }
+                     if (el && window.htmx) htmx.trigger(el, 'load');
+                     else if (el) {
+                       // Fallback re-fetch: strip & re-add the hx-get target so htmx re-fires
+                       const url = el.getAttribute('hx-get');
+                       if (url && window.htmx) htmx.ajax('GET', url, { target: el, swap: 'outerHTML' });
+                     }
                    }
-                 } }">
+                 } }}">
 
     <!-- ================= HEADER ================= -->
     <header class="border-b border-dark-700 bg-dark-900/90 backdrop-blur sticky top-0 z-50">
@@ -82,6 +87,9 @@
             <button @click="refreshTab('telegram')"
                     :class="activeTab === 'telegram' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🤖 Bot</button>
+            <button @click="refreshTab('termux')"
+                    :class="activeTab === 'termux' ? 'tab-active' : 'tab-inactive'"
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">📡 Auto-Expense</button>
         </nav>
     </header>
 
@@ -168,6 +176,17 @@
                     <div class="grid grid-cols-2 gap-2">
                         <input type="date" name="expense_date"
                                class="bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white text-sm">
+                        <select name="source_account"
+                                class="bg-dark-950 border border-dark-800 rounded-xl px-1 py-2.5 text-white text-sm">
+                            <option value="">From where? (capital)</option>
+                            <option value="bybit">Bybit (USD)</option>
+                            <option value="phoenix">Phoenix (USD)</option>
+                            <option value="mexc">MEXC (USD)</option>
+                            <option value="unicredit">UniCredit (EUR)</option>
+                            <option value="wise">Wise (EUR)</option>
+                        </select>
+                    </div>
+                    <div class="grid grid-cols-1 gap-2">
                         <input type="text" name="note" placeholder="Note (optional)"
                                class="bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                     </div>
@@ -257,6 +276,17 @@
             </div>
             <div id="money-area" hx-get="/api/money/view" hx-trigger="load">
                 <div class="text-slate-500 py-8 text-center text-sm">Loading cashflow…</div>
+            </div>
+        </div>
+
+        <!-- ============ TERMUX TAB ============ -->
+        <div x-show="activeTab === 'termux'" x-cloak class="space-y-5">
+            <div class="mb-2">
+                <h2 class="font-bold text-lg text-white">📡 Termux Auto-Expense</h2>
+                <p class="text-xs text-slate-400 mt-0.5">Reads bank/payment notifications → logs expenses → deducts the capital balance automatically.</p>
+            </div>
+            <div id="termux-area" hx-get="/api/termux/view" hx-trigger="load">
+                <div class="text-slate-500 py-8 text-center text-sm">Loading notifications…</div>
             </div>
         </div>
 

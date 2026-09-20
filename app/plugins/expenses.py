@@ -16,9 +16,75 @@ class ExpensesPlugin(LifeOSPlugin):
                 category TEXT NOT NULL,
                 note TEXT,
                 expense_date TEXT DEFAULT (date('now')),
+                source_account TEXT,
+                balance_before REAL,
+                balance_after REAL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # Migration: add columns if missing
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(expenses)").fetchall()]
+        if "source_account" not in cols:
+            conn.execute("ALTER TABLE expenses ADD COLUMN source_account TEXT")
+        if "balance_before" not in cols:
+            conn.execute("ALTER TABLE expenses ADD COLUMN balance_before REAL")
+        if "balance_after" not in cols:
+            conn.execute("ALTER TABLE expenses ADD COLUMN balance_after REAL")
+        conn.commit()
+
+    def _deduct_from_capital(self, amount: float, currency: str, platform: str):
+        """Deduct an expense from a capital account, converting EUR<->USD.
+        Returns (balance_before, balance_after) or (None, None)."""
+        if not platform or amount <= 0:
+            return (None, None)
+        from app.database import db as global_db
+        with global_db.get_connection() as conn:
+            acc = conn.execute(
+                "SELECT * FROM capital_accounts WHERE platform = ? ORDER BY id LIMIT 1",
+                (platform,),
+            ).fetchone()
+            if not acc:
+                return (None, None)
+            # Convert the expense to the account's native currency
+            if acc["currency"] == currency:
+                deduct = amount
+            elif acc["currency"] == "USD":  # expense in EUR -> USD
+                from app.plugins.capital import _fx_eur_to_usd
+                deduct = amount * _fx_eur_to_usd()
+            else:  # expense in USD -> EUR
+                from app.plugins.capital import _fx_eur_to_usd
+                deduct = amount / _fx_eur_to_usd()
+            before = float(acc["balance"])
+            after = max(0.0, before - deduct)
+            conn.execute(
+                "UPDATE capital_accounts SET balance = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (after, acc["id"]),
+            )
+            return (before, after)
+
+    def _refund_to_capital(self, amount: float, currency: str, platform: str):
+        """Refund a deleted expense back to its capital account."""
+        if not platform:
+            return
+        from app.database import db as global_db
+        from app.plugins.capital import _fx_eur_to_usd
+        with global_db.get_connection() as conn:
+            acc = conn.execute(
+                "SELECT * FROM capital_accounts WHERE platform = ? ORDER BY id LIMIT 1",
+                (platform,),
+            ).fetchone()
+            if not acc:
+                return
+            if acc["currency"] == currency:
+                refund = amount
+            elif acc["currency"] == "USD":
+                refund = amount * _fx_eur_to_usd()
+            else:
+                refund = amount / _fx_eur_to_usd()
+            conn.execute(
+                "UPDATE capital_accounts SET balance = balance + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (refund, acc["id"]),
+            )
 
     def register_routes(self) -> APIRouter:
         router = APIRouter()
@@ -49,7 +115,8 @@ class ExpensesPlugin(LifeOSPlugin):
                             <span class='font-bold text-white text-lg'>€{e['amount']:.2f}</span>
                             <span class='text-xs px-2 py-0.5 rounded bg-dark-700 text-emerald-400 font-mono uppercase'>{e['category']}</span>
                         </div>
-                        <p class='text-xs text-slate-400 mt-1'>{e['note'] or 'No note'} • <span class='font-mono'>{e['expense_date']}</span></p>
+                        <p class='text-xs text-slate-400 mt-1'>{e['note'] or 'No note'} • <span class='font-mono'>{e['expense_date']}</span>{" • <span class='font-mono text-slate-500'>" + e['source_account'] + "</span>" if e['source_account'] else ''}</p>
+                        {"<p class='text-[10px] font-mono text-slate-500 mt-0.5'>bal " + f"{e['balance_before']:.2f}" + " → <span class='text-red-400'>−" + f"{e['balance_before'] - e['balance_after']:.2f}" + "</span> → <span class='text-emerald-400'>" + f"{e['balance_after']:.2f}" + "</span></p>" if e['source_account'] and e['balance_before'] is not None else ''}
                     </div>
                     <button hx-delete='/api/expenses/{e['id']}' hx-target='#expenses-list' class='text-slate-500 hover:text-red-400 p-1.5 transition'>✕</button>
                 </div>
@@ -73,22 +140,44 @@ class ExpensesPlugin(LifeOSPlugin):
             return html
 
         @router.post("/", response_class=HTMLResponse)
-        def create_expense(request: Request, amount: float = Form(...), category: str = Form(...), note: str = Form(""), expense_date: str = Form("")):
+        def create_expense(
+            request: Request,
+            amount: float = Form(...),
+            category: str = Form(...),
+            note: str = Form(""),
+            expense_date: str = Form(""),
+            source_account: str = Form(""),
+        ):
             from app.database import db as global_db
             expense_date = (expense_date or "").strip() or "date('now')"
+            source = (source_account or "").strip() or None
             with global_db.get_connection() as conn:
                 conn.execute(
-                    "INSERT INTO expenses (amount, category, note, expense_date) VALUES (?, ?, ?, {})".format(expense_date if expense_date.startswith("date(") else "?"),
-                    (amount, category, note)
+                    "INSERT INTO expenses (amount, category, note, expense_date, source_account) VALUES (?, ?, ?, {}, ?)".format(expense_date if expense_date.startswith("date(") else "?"),
+                    (amount, category, note, source)
                     if expense_date.startswith("date(")
-                    else (amount, category, note, expense_date),
+                    else (amount, category, note, expense_date, source),
                 )
+                expense_id = cur.lastrowid if (cur := conn.execute("SELECT last_insert_rowid()").fetchone()) else None
+                for r in conn.execute("SELECT id FROM expenses ORDER BY id DESC LIMIT 1"):
+                    expense_id = r["id"]
+            if source:
+                before, after = self._deduct_from_capital(amount, "EUR", source)
+                if before is not None and expense_id:
+                    with global_db.get_connection() as conn:
+                        conn.execute(
+                            "UPDATE expenses SET balance_before = ?, balance_after = ? WHERE id = ?",
+                            (before, after, expense_id),
+                        )
             return expenses_list_html(request)
 
         @router.delete("/{expense_id}", response_class=HTMLResponse)
         def delete_expense(request: Request, expense_id: int):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
+                row = conn.execute("SELECT amount, source_account FROM expenses WHERE id = ?", (expense_id,)).fetchone()
+                if row and row["source_account"]:
+                    self._refund_to_capital(row["amount"], "EUR", row["source_account"])
                 conn.execute("DELETE FROM expenses WHERE id = ?", (expense_id,))
             return expenses_list_html(request)
 

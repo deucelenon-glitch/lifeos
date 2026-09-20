@@ -233,7 +233,19 @@ class PlannerPlugin(LifeOSPlugin):
         def delete_plan(request: Request, plan_id: int):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
+                plan = conn.execute("SELECT * FROM plans WHERE id = ?", (plan_id,)).fetchone()
+                if not plan:
+                    return planner_view(request)
+                target_type = plan["target_type"]
+                target_id = plan["target_id"]
                 conn.execute("DELETE FROM plans WHERE id = ?", (plan_id,))
+                if target_type == "habit" and target_id:
+                    # Cascade: removing the plan removes the linked habit + its logs
+                    # so it disappears from every tab (Habits, Planner, progress).
+                    conn.execute("DELETE FROM habit_logs WHERE habit_id = ?", (target_id,))
+                    conn.execute("DELETE FROM habits WHERE id = ?", (target_id,))
+                # Expense/cashflow plans keep the underlying data (history), the
+                # plan row is what's removed — tab lists derive from actual data.
             return planner_view(request)
 
         # JSON API for programmatic queries / CLI / future widgets

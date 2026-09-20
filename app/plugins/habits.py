@@ -144,6 +144,12 @@ class HabitsPlugin(LifeOSPlugin):
             with global_db.get_connection() as conn:
                 conn.execute("DELETE FROM habits WHERE id = ?", (habit_id,))
                 conn.execute("DELETE FROM habit_logs WHERE habit_id = ?", (habit_id,))
+                # Keep Planner in sync: remove any plan pointing at this habit
+                # so the deleted habit doesn't linger as a dead card in the Planner.
+                conn.execute(
+                    "DELETE FROM plans WHERE target_type = 'habit' AND target_id = ?",
+                    (habit_id,),
+                )
             return habits_list_html(request)
 
         return router

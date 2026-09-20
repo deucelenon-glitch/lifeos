@@ -33,6 +33,7 @@ class MoneyPlugin(LifeOSPlugin):
                 rent_due_day INTEGER DEFAULT 1,
                 currency TEXT DEFAULT '€',
                 monthly_budget REAL DEFAULT 0,
+                income_goal REAL DEFAULT 0,
                 alert_state TEXT,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
@@ -61,6 +62,11 @@ class MoneyPlugin(LifeOSPlugin):
         row = conn.execute("SELECT COUNT(*) FROM money_config").fetchone()
         if not row or row[0] == 0:
             conn.execute("INSERT INTO money_config (rent_amount, rent_due_day, monthly_budget) VALUES (0, 1, 0)")
+        # Migration: add income_goal column if missing (existing DBs)
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(money_config)").fetchall()]
+        if "income_goal" not in cols:
+            conn.execute("ALTER TABLE money_config ADD COLUMN income_goal REAL DEFAULT 0")
+        conn.commit()
 
     # ------------------------------------------------------------------
     # helpers
@@ -237,9 +243,27 @@ class MoneyPlugin(LifeOSPlugin):
 
             rent = cfg["rent_amount"] or 0
             budget = cfg["monthly_budget"] or 0
+            income_goal = cfg["income_goal"] or 0
             due_day = cfg["rent_due_day"] or 1
             cur = cfg["currency"] or "€"
             today_d = datetime.now().day
+
+            # Income goal progress
+            if income_goal > 0:
+                goal_pct = min(100.0, (income / income_goal) * 100)
+                goal_left = _r2(max(0.0, income_goal - income))
+                if income >= income_goal:
+                    goal_txt = f"🎯 Goal hit — {cur}{_r2(income - income_goal):.2f} over"
+                    goal_cls = "text-emerald-400"
+                    goal_state = "HIT"
+                else:
+                    goal_txt = f"{cur}{goal_left:.2f} to go"
+                    goal_cls = "text-amber-400"
+                    goal_state = f"{goal_pct:.0f}%"
+            else:
+                goal_txt = "Set an income goal below"
+                goal_cls = "text-slate-400"
+                goal_state = "—"
 
             if budget > 0:
                 remaining = _r2(budget - burn)
@@ -298,6 +322,11 @@ class MoneyPlugin(LifeOSPlugin):
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Income (month)</div>
                         <div class='text-xl font-bold text-emerald-400 font-mono'>{cur}{income:.2f}</div>
                         <div class='text-[10px] text-slate-500'>today +{cur}{today:.2f}</div>
+                    </div>
+                    <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Income Goal</div>
+                        <div class='text-xl font-bold {goal_cls} font-mono'>{cur}{income_goal:.2f}</div>
+                        <div class='text-[10px] {goal_cls}'>{goal_txt}</div>
                     </div>
                     <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Burn (month)</div>
@@ -366,6 +395,11 @@ class MoneyPlugin(LifeOSPlugin):
                             <input type='number' step='0.01' name='monthly_budget' value='{budget:.2f}'
                                    class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                         </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Income goal {cur}/mo</label>
+                            <input type='number' step='0.01' name='income_goal' value='{income_goal:.2f}'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                        </div>
                         <div class='bg-dark-950 rounded-lg px-2 py-2 text-center'>
                             <div class='text-[10px] uppercase font-mono text-slate-400'>State</div>
                             <span class='{status_cls} font-mono text-sm font-bold'>{state_label}</span>
@@ -410,19 +444,20 @@ class MoneyPlugin(LifeOSPlugin):
             rent_amount: float = Form(0),
             rent_due_day: int = Form(1),
             monthly_budget: float = Form(0),
+            income_goal: float = Form(0),
         ):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 cfg = self._cfg(conn)
                 if cfg:
                     conn.execute(
-                        "UPDATE money_config SET rent_amount = ?, rent_due_day = ?, monthly_budget = ? WHERE id = ?",
-                        (rent_amount, rent_due_day, monthly_budget, cfg["id"]),
+                        "UPDATE money_config SET rent_amount = ?, rent_due_day = ?, monthly_budget = ?, income_goal = ? WHERE id = ?",
+                        (rent_amount, rent_due_day, monthly_budget, income_goal, cfg["id"]),
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO money_config (rent_amount, rent_due_day, monthly_budget) VALUES (?, ?, ?)",
-                        (rent_amount, rent_due_day, monthly_budget),
+                        "INSERT INTO money_config (rent_amount, rent_due_day, monthly_budget, income_goal) VALUES (?, ?, ?, ?)",
+                        (rent_amount, rent_due_day, monthly_budget, income_goal),
                     )
             self.check_budget(notify=True)
             return money_view(request)

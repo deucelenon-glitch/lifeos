@@ -21,8 +21,30 @@ PLATFORMS = {
 }
 
 
+def _p2p_rate() -> float:
+    """Use the rate the user set in the P2P tab when it exists.
+
+    The P2P rate is the user's own EUR→USDT reference (set in the P2P tab),
+    so it's the most accurate EUR→USD conversion for the capital tracker.
+    Returns 0.0 when unset so callers fall back to live FX.
+    """
+    try:
+        from app.database import db as global_db
+        with global_db.get_connection() as conn:
+            row = conn.execute("SELECT rate FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
+        if row and row["rate"]:
+            return float(row["rate"])
+    except Exception as e:
+        print(f"[capital] p2p rate read failed ({e})")
+    return 0.0
+
+
 def _fx_eur_to_usd() -> float:
-    """Live EUR→USD mid rate via open.er-api.com. Falls back to 1.08 offline."""
+    """EUR→USD rate: user's P2P rate if set, otherwise live mid rate.
+    Live via open.er-api.com; falls back to 1.08 offline."""
+    p2p = _p2p_rate()
+    if p2p:
+        return p2p
     try:
         req = urllib.request.Request(
             "https://open.er-api.com/v6/latest/EUR",
@@ -85,7 +107,7 @@ class CapitalPlugin(LifeOSPlugin):
         return conn.execute("SELECT * FROM capital_accounts ORDER BY platform, id").fetchall()
 
     def _sums(self, conn):
-        """EUR totals, USD totals, and combined totals (EUR & USD) at live rate."""
+        """EUR totals, USD totals, and combined totals (EUR & USD) at P2P/live rate."""
         rows = self._accounts(conn)
         eur = sum((r["balance"] or 0) for r in rows if r["currency"] == "EUR")
         usd = sum((r["balance"] or 0) for r in rows if r["currency"] == "USD")
@@ -159,7 +181,7 @@ class CapitalPlugin(LifeOSPlugin):
                     <div>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>🌍 Total (USD)</div>
                         <div class='text-lg font-bold text-emerald-400 font-mono'>${sums['total_usd']:.2f}</div>
-                        <div class='text-[10px] text-slate-500'>realtime fx</div>
+                        <div class='text-[10px] text-slate-500'>P2P rate / realtime fx</div>
                     </div>
                 </div>
 

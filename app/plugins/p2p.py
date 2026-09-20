@@ -33,6 +33,9 @@ class P2PPlugin(LifeOSPlugin):
                 max_sats INTEGER DEFAULT 500,
                 enabled INTEGER DEFAULT 1,
                 last_nudged_at DATETIME,
+                reminder_time TEXT,
+                order_size REAL,
+                monthly_goal REAL,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -82,6 +85,13 @@ class P2PPlugin(LifeOSPlugin):
         if "rate" not in cols:
             conn.execute("ALTER TABLE p2p_config ADD COLUMN rate REAL DEFAULT 1.15")
             conn.commit()
+        if "reminder_time" not in cols:
+            conn.execute("ALTER TABLE p2p_config ADD COLUMN reminder_time TEXT")
+        if "order_size" not in cols:
+            conn.execute("ALTER TABLE p2p_config ADD COLUMN order_size REAL")
+        if "monthly_goal" not in cols:
+            conn.execute("ALTER TABLE p2p_config ADD COLUMN monthly_goal REAL")
+        conn.commit()
 
         row = conn.execute("SELECT COUNT(*) FROM p2p_config").fetchone()
         if not row or row[0] == 0:
@@ -137,9 +147,37 @@ class P2PPlugin(LifeOSPlugin):
         def p2p_view(request: Request):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
+                cfg = self._cfg(conn)
                 rate = self._rate(conn)
                 orders = self._orders(conn, 200)
                 totals = self._totals(conn)
+
+            order_size = cfg["order_size"] or 0
+            reminder_time = cfg["reminder_time"] or ""
+            monthly_goal = cfg["monthly_goal"] or 0
+
+            # Monthly progress toward the P2P order goal (EUR received this month)
+            month_prefix = datetime.now().strftime("%Y-%m")
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                mrow = conn.execute(
+                    "SELECT COALESCE(SUM(receive_eur),0) s, COUNT(*) c FROM p2p_orders WHERE strftime('%Y-%m', COALESCE(trade_date, date('now'))) = ?",
+                    (month_prefix,),
+                ).fetchone()
+            month_eur = _round2(mrow["s"] or 0)
+            month_orders = mrow["c"] or 0
+
+            # Projections: hit the monthly goal every month → 6-month / 1-year
+            proj_6 = _round2(monthly_goal * 6)
+            proj_12 = _round2(monthly_goal * 12)
+            pct = min(100.0, (month_eur / monthly_goal * 100) if monthly_goal > 0 else 0.0)
+            goal_left = _round2(max(0.0, monthly_goal - month_eur))
+
+            # Reminder options every €50
+            size_opts = "".join(
+                f"<option value='{v}' {'selected' if order_size == v else ''}>€{v}</option>"
+                for v in range(50, 1001, 50)
+            )
 
             rows_html = ""
             for o in orders:
@@ -162,7 +200,7 @@ class P2PPlugin(LifeOSPlugin):
 
             html = f"""
             <div class='space-y-4'>
-                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4 grid grid-cols-2 md:grid-cols-4 gap-3'>
+                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4 grid grid-cols-2 md:grid-cols-5 gap-3'>
                     <div>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Live Rate</div>
                         <div class='text-lg font-bold text-white font-mono'>{rate:.3f}</div>
@@ -186,6 +224,47 @@ class P2PPlugin(LifeOSPlugin):
                         <div class='text-[10px] uppercase font-mono text-slate-400'>USDT Sent</div>
                         <div class='text-lg font-bold text-white font-mono'>{totals['sent']:.2f}</div>
                         <div class='text-[10px] text-slate-500'>spread {totals['buy'] - totals['sent']:.2f}</div>
+                    </div>
+                    <div>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Month vs Goal</div>
+                        <div class='text-lg font-bold {"text-emerald-400" if monthly_goal and month_eur >= monthly_goal else "text-amber-400"} font-mono'>€{month_eur:.2f}</div>
+                        <div class='text-[10px] text-slate-500'>/ €{monthly_goal:.0f} goal · {month_orders} orders</div>
+                    </div>
+                </div>
+
+                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
+                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>⏰ Order Reminder</h4>
+                    <form hx-post='/api/p2p/config' hx-target='#p2p-area' hx-swap='outerHTML'
+                          @submit="toast = 'Reminder saved ✓ — notified daily at the set time'"
+                          class='grid grid-cols-2 md:grid-cols-5 gap-2 items-end'>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Order size</label>
+                            <select name='order_size' class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                                {size_opts}
+                            </select>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Remind at</label>
+                            <input type='time' name='reminder_time' value='{reminder_time}'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Monthly goal €</label>
+                            <input type='number' step='50' name='monthly_goal' value='{monthly_goal:.0f}' min='0'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
+                        </div>
+                        <div class='bg-dark-950 rounded-lg px-2 py-2 text-center'>
+                            <div class='text-[10px] uppercase font-mono text-slate-400'>Progress</div>
+                            <span class='{"text-emerald-400" if monthly_goal and pct >= 100 else "text-amber-400"} font-mono text-sm font-bold'>{pct:.0f}%</span>
+                            <div class='text-[10px] text-slate-500'>€{goal_left:.0f} left</div>
+                        </div>
+                        <button type='submit' class='w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-xl text-sm'>Save</button>
+                    </form>
+                    <div class='mt-2.5 flex gap-2 items-center text-xs'>
+                        <span class='text-slate-400'>📈 Projection:</span>
+                        <span class='px-2 py-1 rounded bg-dark-800 font-mono text-slate-200'>6mo → <b class='text-emerald-400'>€{proj_6:,.0f}</b></span>
+                        <span class='px-2 py-1 rounded bg-dark-800 font-mono text-slate-200'>1yr → <b class='text-emerald-400'>€{proj_12:,.0f}</b></span>
+                        <span class='text-slate-500'>at €{monthly_goal:.0f}/mo × {_round2(monthly_goal / order_size) if order_size else 0:.0f} orders</span>
                     </div>
                 </div>
 
@@ -271,14 +350,27 @@ class P2PPlugin(LifeOSPlugin):
             return html
 
         @router.post("/config", response_class=HTMLResponse)
-        def save_config(request: Request, rate: float = Form(...)):
+        def save_config(
+            request: Request,
+            rate: float = Form(...),
+            order_size: float = Form(0),
+            reminder_time: str = Form(""),
+            monthly_goal: float = Form(0),
+        ):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 cfg = self._cfg(conn)
+                reminder_time = reminder_time.strip()
                 if cfg:
-                    conn.execute("UPDATE p2p_config SET rate = ? WHERE id = ?", (rate, cfg["id"]))
+                    conn.execute(
+                        "UPDATE p2p_config SET rate = ?, order_size = ?, reminder_time = ?, monthly_goal = ? WHERE id = ?",
+                        (rate, order_size or None, reminder_time or None, monthly_goal or None, cfg["id"]),
+                    )
                 else:
-                    conn.execute("INSERT INTO p2p_config (interval_minutes, rate) VALUES (480, ?)", (rate,))
+                    conn.execute(
+                        "INSERT INTO p2p_config (interval_minutes, rate, order_size, reminder_time, monthly_goal) VALUES (480, ?, ?, ?, ?)",
+                        (rate, order_size or None, reminder_time or None, monthly_goal or None),
+                    )
             return p2p_view(request)
 
         @router.post("/orders", response_class=HTMLResponse)
