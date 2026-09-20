@@ -125,10 +125,13 @@ class WebAppPlugin(LifeOSPlugin):
                 for entry in (m if isinstance(m, list) else [m]):
                     entry["id"] = entry.get("id", name)
                     entries.append(entry)
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                habits = conn.execute("SELECT id, name FROM habits ORDER BY name").fetchall()
             return templates.TemplateResponse(
                 request,
                 "index.html",
-                {"menu_entries": entries},
+                {"menu_entries": entries, "habits": habits},
             )
 
         return router

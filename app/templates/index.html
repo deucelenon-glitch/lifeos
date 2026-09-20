@@ -208,10 +208,18 @@
                                class="w-full bg-dark-950 border border-dark-800 rounded-xl px-3 py-2 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                         <datalist id="cat-expense-pick"></datalist>
                     </div>
+                    <div x-show="plannerTarget === 'habit'" x-cloak class="mt-2">
+                        <select name="target_id" class="w-full bg-dark-950 border border-dark-800 rounded-xl px-1 py-2.5 text-white text-sm">
+                            <option value="0">— pick the habit this plan tracks —</option>
+                            {% for h in habits %}
+                            <option value="{{ h.id }}">{{ h.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
                     <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-xl text-sm">+ Add Plan</button>
                 </form>
             </div>
-            <div id="planner-list" hx-get="/api/planner/list" hx-trigger="load">
+            <div id="planner-list" hx-get="/api/planner/view" hx-trigger="load">
                 <div class="text-slate-500 py-8 text-center text-sm">Loading plans…</div>
             </div>
         </div>
