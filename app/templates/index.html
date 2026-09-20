@@ -31,7 +31,20 @@
     </style>
 </head>
 <body class="bg-dark-950 text-slate-100 min-h-screen font-sans antialiased pb-20"
-      x-data="{ activeTab: 'home', toast: null, plannerTarget: 'habit' }">
+      x-data="{ activeTab: 'home', toast: null, plannerTarget: 'habit',
+                 refreshTab(tab) {
+                   this.activeTab = tab;
+                   // Re-pull the target list so data logged from the Planner
+                   // (or anywhere else) shows up the moment you open the tab.
+                   const map = { habits: '#habits-list', expenses: '#expenses-list',
+                                 money: '#money-area', planner: '#planner-list', p2p: '#p2p-area' };
+                   const sel = map[tab];
+                   if (sel) {
+                     const el = document.querySelector(sel);
+                     if (el && el.htmx) htmx.trigger(el, 'load');
+                     else if (el) { /* fallback: re-fetch */ }
+                   }
+                 } }">
 
     <!-- ================= HEADER ================= -->
     <header class="border-b border-dark-700 bg-dark-900/90 backdrop-blur sticky top-0 z-50">
@@ -45,25 +58,25 @@
         </div>
         <!-- Tab nav — scrollable on mobile -->
         <nav class="flex overflow-x-auto gap-1 px-4 py-1.5 bg-dark-900/80 border-t border-dark-700">
-            <button @click="activeTab = 'home'"
+            <button @click="refreshTab('home')"
                     :class="activeTab === 'home' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🏠 Home</button>
-            <button @click="activeTab = 'habits'"
+            <button @click="refreshTab('habits')"
                     :class="activeTab === 'habits' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🔥 Habits</button>
-            <button @click="activeTab = 'expenses'"
+            <button @click="refreshTab('expenses')"
                     :class="activeTab === 'expenses' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">💰 Expenses</button>
-            <button @click="activeTab = 'money'"
+            <button @click="refreshTab('money')"
                     :class="activeTab === 'money' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">💵 Cashflow</button>
-            <button @click="activeTab = 'planner'"
+            <button @click="refreshTab('planner')"
                     :class="activeTab === 'planner' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🗓️ Planner</button>
-            <button @click="activeTab = 'p2p'"
+            <button @click="refreshTab('p2p')"
                     :class="activeTab === 'p2p' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🛰️ P2P</button>
-            <button @click="activeTab = 'telegram'"
+            <button @click="refreshTab('telegram')"
                     :class="activeTab === 'telegram' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🤖 Bot</button>
         </nav>
@@ -149,11 +162,13 @@
                                required class="bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                         <datalist id="cat-expense"></datalist>
                     </div>
-                    <div class="flex gap-2">
+                    <div class="grid grid-cols-2 gap-2">
+                        <input type="date" name="expense_date"
+                               class="bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white text-sm">
                         <input type="text" name="note" placeholder="Note (optional)"
-                               class="flex-1 min-w-0 bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
-                        <button type="submit" class="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-5 py-2.5 rounded-xl text-sm">Log</button>
+                               class="bg-dark-950 border border-dark-800 rounded-xl px-3 py-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500 text-sm">
                     </div>
+                    <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2.5 rounded-xl text-sm">Log Expense</button>
                 </form>
             </div>
             <div id="expenses-list" hx-get="/api/expenses/list" hx-trigger="load">

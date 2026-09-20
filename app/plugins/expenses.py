@@ -73,10 +73,16 @@ class ExpensesPlugin(LifeOSPlugin):
             return html
 
         @router.post("/", response_class=HTMLResponse)
-        def create_expense(request: Request, amount: float = Form(...), category: str = Form(...), note: str = Form("")):
+        def create_expense(request: Request, amount: float = Form(...), category: str = Form(...), note: str = Form(""), expense_date: str = Form("")):
             from app.database import db as global_db
+            expense_date = (expense_date or "").strip() or "date('now')"
             with global_db.get_connection() as conn:
-                conn.execute("INSERT INTO expenses (amount, category, note) VALUES (?, ?, ?)", (amount, category, note))
+                conn.execute(
+                    "INSERT INTO expenses (amount, category, note, expense_date) VALUES (?, ?, ?, {})".format(expense_date if expense_date.startswith("date(") else "?"),
+                    (amount, category, note)
+                    if expense_date.startswith("date(")
+                    else (amount, category, note, expense_date),
+                )
             return expenses_list_html(request)
 
         @router.delete("/{expense_id}", response_class=HTMLResponse)

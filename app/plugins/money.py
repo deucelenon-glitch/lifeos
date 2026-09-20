@@ -128,17 +128,23 @@ class MoneyPlugin(LifeOSPlugin):
     # ------------------------------------------------------------------
     # public API used by other plugins (P2P link)
     # ------------------------------------------------------------------
-    def record_income(self, amount: float, source: str = "manual", note: str = "", ref_id: int = None):
+    def record_income(self, amount: float, source: str = "manual", note: str = "", ref_id: int = None, income_date: str = None):
         """Log income. Used by P2P ledger to auto-feed daily profit."""
         if not amount or amount == 0:
             return None
         from app.database import Database
         db = Database()
         with db.get_connection() as conn:
-            cur = conn.execute(
-                "INSERT INTO income_entries (amount, source, note, ref_id) VALUES (?, ?, ?, ?)",
-                (_r2(amount), source, note or source, ref_id),
-            )
+            if income_date:
+                cur = conn.execute(
+                    "INSERT INTO income_entries (amount, source, note, ref_id, income_date) VALUES (?, ?, ?, ?, ?)",
+                    (_r2(amount), source, note or source, ref_id, income_date),
+                )
+            else:
+                cur = conn.execute(
+                    "INSERT INTO income_entries (amount, source, note, ref_id) VALUES (?, ?, ?, ?)",
+                    (_r2(amount), source, note or source, ref_id),
+                )
             row_id = cur.lastrowid
         return row_id
 
@@ -268,9 +274,10 @@ class MoneyPlugin(LifeOSPlugin):
             rows = ""
             for e in entries:
                 tag = "🛰️" if e["source"] == "p2p" else "💶"
+                delete = f"<button hx-delete='/api/money/income/{e['id']}' hx-target='#money-area' hx-swap='outerHTML' class='text-slate-600 hover:text-red-400 text-[10px] ml-1'>✕</button>" if e["source"] != "p2p" else ""
                 rows += f"""
                 <div class='flex justify-between items-center text-xs py-1.5'>
-                    <span class='text-slate-400 font-mono'>{e['income_date']} {tag} {e['note'] or e['source']}</span>
+                    <span class='text-slate-400 font-mono'>{e['income_date']} {tag} {e['note'] or e['source']}{delete}</span>
                     <span class='text-emerald-400 font-mono'>+{cur}{e['amount']:.2f}</span>
                 </div>"""
 
@@ -377,12 +384,24 @@ class MoneyPlugin(LifeOSPlugin):
             amount: float = Form(...),
             note: str = Form(""),
             source: str = Form("manual"),
+            income_date: str = Form(""),
         ):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 from app.categories import ensure_category
                 source = ensure_category(conn, "income", source)
-            self.record_income(amount, source=source, note=note)
+            income_date = (income_date or "").strip()
+            if income_date:
+                self.record_income(amount, source=source, note=note, income_date=income_date)
+            else:
+                self.record_income(amount, source=source, note=note)
+            return money_view(request)
+
+        @router.delete("/income/{entry_id}", response_class=HTMLResponse)
+        def delete_income(request: Request, entry_id: int):
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                conn.execute("DELETE FROM income_entries WHERE id = ? AND source != 'p2p'", (entry_id,))
             return money_view(request)
 
         @router.post("/config", response_class=HTMLResponse)

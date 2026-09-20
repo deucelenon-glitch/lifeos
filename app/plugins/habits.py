@@ -102,15 +102,40 @@ class HabitsPlugin(LifeOSPlugin):
                 conn.execute("INSERT INTO habits (name, target_streak) VALUES (?, ?)", (name, target_streak))
             return habits_list_html(request)
 
-        @router.post("/{habit_id}/check", response_class=HTMLResponse)
-        def check_habit(request: Request, habit_id: int):
+        @router.post("/check", response_class=HTMLResponse)
+        def check_habit_form(request: Request, habit_id: int = Form(...), habit_date: str = Form("")):
+            """Form-based check (used by Planner hub) — habit_id comes from the form."""
             from app.database import db as global_db
+            habit_date = (habit_date or "").strip()
             with global_db.get_connection() as conn:
-                # Insert today's check if not already checked today
-                conn.execute("""
-                    INSERT OR IGNORE INTO habit_logs (habit_id, completed_date)
-                    VALUES (?, date('now'))
-                """, (habit_id,))
+                if habit_date:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO habit_logs (habit_id, completed_date) VALUES (?, ?)",
+                        (habit_id, habit_date),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO habit_logs (habit_id, completed_date) VALUES (?, date('now'))",
+                        (habit_id,),
+                    )
+            return habits_list_html(request)
+
+        @router.post("/{habit_id}/check", response_class=HTMLResponse)
+        def check_habit(request: Request, habit_id: int, habit_date: str = Form("")):
+            from app.database import db as global_db
+            habit_date = (habit_date or "").strip()
+            with global_db.get_connection() as conn:
+                # Insert check (defaults to today, or explicit date from planner)
+                if habit_date:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO habit_logs (habit_id, completed_date) VALUES (?, ?)",
+                        (habit_id, habit_date),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO habit_logs (habit_id, completed_date) VALUES (?, date('now'))",
+                        (habit_id,),
+                    )
             return habits_list_html(request)
 
         @router.delete("/{habit_id}", response_class=HTMLResponse)

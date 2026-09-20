@@ -46,10 +46,14 @@ class P2PPlugin(LifeOSPlugin):
                 rate REAL DEFAULT 1.15,
                 side TEXT DEFAULT 'buy',
                 note TEXT,
+                trade_date TEXT DEFAULT (date('now')),
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
         cols = [c[1] for c in conn.execute("PRAGMA table_info(p2p_orders)").fetchall()]
+        if "trade_date" not in cols:
+            conn.execute("ALTER TABLE p2p_orders ADD COLUMN trade_date TEXT")
+            conn.execute("UPDATE p2p_orders SET trade_date = substr(created_at, 1, 10) WHERE trade_date IS NULL OR trade_date = ''")
         if "amount_sats" in cols and "receive_eur" not in cols:
             # Legacy schema -> migrate preserving data
             conn.execute("ALTER TABLE p2p_orders RENAME TO p2p_orders_legacy")
@@ -143,7 +147,7 @@ class P2PPlugin(LifeOSPlugin):
                 cls = "text-emerald-400" if profit >= 0 else "text-red-400"
                 rows_html += f"""
                 <tr class='border-b border-dark-800/60'>
-                    <td class='px-2 py-1.5 text-slate-500 font-mono'>{str(o['created_at'])[:10]}</td>
+                    <td class='px-2 py-1.5 text-slate-500 font-mono'>{o['trade_date'] or str(o['created_at'])[:10]}</td>
                     <td class='px-2 py-1.5 text-slate-400 font-mono'>{o['note'] or ''}</td>
                     <td class='px-2 py-1.5 text-white font-mono text-right'>{o['receive_eur']:.2f}</td>
                     <td class='px-2 py-1.5 text-emerald-300 font-mono text-right'>{o['buy_usdt']:.2f}</td>
@@ -204,6 +208,11 @@ class P2PPlugin(LifeOSPlugin):
                             <label class='text-[10px] uppercase font-mono text-slate-400'>Note (owner)</label>
                             <input type='text' name='note' placeholder='dex' value='dex'
                                    class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm w-32'>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Date</label>
+                            <input type='date' name='trade_date'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                         </div>
                         <div class='bg-dark-950 rounded-lg px-2 py-2 text-center'>
                             <div class='text-[10px] uppercase font-mono text-slate-400'>Buy USDT</div>
@@ -278,15 +287,17 @@ class P2PPlugin(LifeOSPlugin):
             receive_eur: float = Form(...),
             sent_usdt: float = Form(0),
             note: str = Form(""),
+            trade_date: str = Form(""),
         ):
             from app.database import db as global_db
+            trade_date = trade_date.strip() or None
             with global_db.get_connection() as conn:
                 live_rate = self._rate(conn)
                 buy = _round2(receive_eur * live_rate)
                 profit = _round2(buy - sent_usdt)
                 cur = conn.execute(
-                    "INSERT INTO p2p_orders (receive_eur, buy_usdt, sent_usdt, profit_usd, rate, note) VALUES (?, ?, ?, ?, ?, ?)",
-                    (receive_eur, buy, sent_usdt, profit, live_rate, note),
+                    "INSERT INTO p2p_orders (receive_eur, buy_usdt, sent_usdt, profit_usd, rate, note, trade_date) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, date('now')))",
+                    (receive_eur, buy, sent_usdt, profit, live_rate, note, trade_date),
                 )
                 order_id = cur.lastrowid
             self._push_income_into_money(profit, order_id=order_id)

@@ -40,12 +40,120 @@ class PlannerPlugin(LifeOSPlugin):
             with global_db.get_connection() as conn:
                 plans = conn.execute("SELECT * FROM plans ORDER BY id DESC").fetchall()
                 habits = conn.execute("SELECT id, name FROM habits ORDER BY name").fetchall()
-                # Get distinct categories from expenses
                 categories = [r[0] for r in conn.execute("SELECT DISTINCT category FROM expenses WHERE category IS NOT NULL AND category != '' ORDER BY category").fetchall()]
+                # Money config for rent visibility
+                try:
+                    money_cfg = conn.execute("SELECT * FROM money_config ORDER BY id DESC LIMIT 1").fetchone()
+                except Exception:
+                    money_cfg = None
+                # P2P rate for trade quick-log
+                try:
+                    from app.plugins.p2p import P2PPlugin
+                    p2p_rate = P2PPlugin()._rate(conn)
+                except Exception:
+                    p2p_rate = 1.15
+
+            # ---- Quick-log row (command center input) ----
+            cat_opts = "".join(f"<option value='{c}'>{c}</option>" for c in (categories or ["Food"]))
+            habit_opts = "".join(f"<option value='{h['id']}'>{h['name']}</option>" for h in habits)
+
+            quick = f"""
+            <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
+                <div class='flex items-center justify-between mb-3'>
+                    <h3 class='font-semibold text-white text-sm'>⚡ Quick Log — everything lands in its tab</h3>
+                    <span class='text-[10px] uppercase font-mono text-slate-500'>planner hub</span>
+                </div>
+                <div class='grid grid-cols-1 md:grid-cols-4 gap-3'>
+                    <!-- Expense -->
+                    <form hx-post='/api/expenses/' hx-target='#expenses-list' hx-swap='outerHTML'
+                          @submit="toast = 'Expense logged ✓'"
+                          class='bg-dark-950 border border-dark-800 rounded-xl p-3 space-y-2'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>💸 Expense</div>
+                        <div class='flex gap-1'>
+                            <input type='number' step='0.01' name='amount' placeholder='0.00' required
+                                   class='w-20 bg-dark-900 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs font-mono'>
+                            <select name='category' class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-1 py-1.5 text-white text-xs'>{cat_opts}</select>
+                        </div>
+                        <div class='flex gap-1'>
+                            <input type='date' name='expense_date' class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-1 py-1.5 text-white text-xs'>
+                            <input type='text' name='note' placeholder='note' class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs'>
+                        </div>
+                        <button class='w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg'>Log</button>
+                    </form>
+                    <!-- Income -->
+                    <form hx-post='/api/money/income' hx-target='#money-area' hx-swap='outerHTML'
+                          @submit="toast = 'Income logged ✓'"
+                          class='bg-dark-950 border border-dark-800 rounded-xl p-3 space-y-2'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>💶 Income</div>
+                        <div class='flex gap-1'>
+                            <input type='number' step='0.01' name='amount' placeholder='0.00' required
+                                   class='w-20 bg-dark-900 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs font-mono'>
+                            <select name='source' class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-1 py-1.5 text-white text-xs'>
+                                <option value='Manual'>Manual</option><option value='Freelance'>Freelance</option>
+                                <option value='Cash'>Cash</option><option value='Other'>Other</option>
+                            </select>
+                        </div>
+                        <div class='flex gap-1'>
+                            <input type='date' name='income_date' class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-1 py-1.5 text-white text-xs'>
+                            <input type='text' name='note' placeholder='note' class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs'>
+                        </div>
+                        <button class='w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg'>Log</button>
+                    </form>
+                    <!-- Habit check -->
+                    <div class='bg-dark-950 border border-dark-800 rounded-xl p-3 space-y-2'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>🔥 Habit check</div>
+                        <form hx-post='/api/habits/check' hx-target='#habits-list' hx-swap='outerHTML'
+                              @submit="toast = 'Habit checked ✓'" class='space-y-2'>
+                            <select name='habit_id' class='w-full bg-dark-900 border border-dark-800 rounded-lg px-1 py-1.5 text-white text-xs'>
+                                {habit_opts if habit_opts else "<option value=''>No habits yet — add one below</option>"}
+                            </select>
+                            <div class='flex gap-1'>
+                                <input type='date' name='habit_date' class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-1 py-1.5 text-white text-xs'>
+                                <button class='bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-3 py-1.5 rounded-lg'>✓</button>
+                            </div>
+                        </form>
+                        <form hx-post='/api/habits/' hx-target='#habits-list' hx-swap='outerHTML'
+                              @submit="toast = 'Habit added ✓'" class='flex gap-1'>
+                            <input type='text' name='name' placeholder='+ new habit (e.g. Gym)' required
+                                   class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs'>
+                            <input type='hidden' name='target_streak' value='7'>
+                            <button class='bg-dark-700 hover:bg-dark-600 text-white text-xs font-medium px-3 py-1.5 rounded-lg'>+</button>
+                        </form>
+                    </div>
+                    <!-- P2P trade -->
+                    <form hx-post='/api/p2p/orders' hx-target='#p2p-area' hx-swap='outerHTML'
+                          @submit="toast = 'Trade logged ✓ — profit fed to Money'"
+                          class='bg-dark-950 border border-dark-800 rounded-xl p-3 space-y-2'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>🛰️ P2P trade</div>
+                        <div class='flex gap-1'>
+                            <input type='number' step='0.01' name='receive_eur' placeholder='€50' required
+                                   class='w-20 bg-dark-900 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs font-mono'>
+                            <input type='number' step='0.01' name='sent_usdt' placeholder='USDT' required
+                                   class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs font-mono'>
+                        </div>
+                        <div class='flex gap-1'>
+                            <input type='date' name='trade_date' class='flex-1 bg-dark-900 border border-dark-800 rounded-lg px-1 py-1.5 text-white text-xs'>
+                            <input type='text' name='note' value='dex' class='w-16 bg-dark-900 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs'>
+                        </div>
+                        <button class='w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg'>Log trade</button>
+                    </form>
+                </div>
+            </div>
+
+            <div class='flex items-center justify-between mt-2'>
+                <h3 class='font-semibold text-white text-sm'>📋 Active plans</h3>
+                <div class='flex gap-3 text-[10px] uppercase font-mono text-slate-500'>
+                    <span>💰 <a href='#' @click.prevent="refreshTab('expenses')" class='hover:text-emerald-400'>Expenses</a></span>
+                    <span>💶 <a href='#' @click.prevent="refreshTab('money')" class='hover:text-emerald-400'>Cashflow</a></span>
+                    <span>🔥 <a href='#' @click.prevent="refreshTab('habits')" class='hover:text-emerald-400'>Habits</a></span>
+                    <span>🛰️ <a href='#' @click.prevent="refreshTab('p2p')" class='hover:text-emerald-400'>P2P</a></span>
+                </div>
+            </div>
+            """
 
             if not plans:
                 empty_html = """
-                <div class='text-slate-500 py-10 text-center text-sm'>
+                <div class='text-slate-500 py-8 text-center text-sm'>
                     No plans yet — set your first goal below.<br>
                     Plans turn trackers into targets: "Gym 3x/week", "Spend ≤100€/week", "5 P2P orders/week".
                 </div>
@@ -53,28 +161,62 @@ class PlannerPlugin(LifeOSPlugin):
             else:
                 empty_html = ""
 
-            html = "<div class='space-y-3'>"
+            html = quick + "<div class='space-y-3 mt-3'>"
             for p in plans:
                 freq = p['frequency']
                 target = p['target_quantity']
                 progress = self._progress_for(global_db, p)
                 pct = min(int((progress / target) * 100), 100) if target else 0
-                
-                # Color coding based on target type and direction
+
                 if p['target_type'] == 'expense':
-                    # For expenses, lower is better (budget ceiling)
                     color = "text-emerald-400" if progress <= target else "text-red-400"
                     prog_display = f"€{progress:.2f} / €{target:.2f}"
                 else:
                     color = "text-emerald-400" if pct >= 100 else ("text-amber-400" if pct >= 50 else "text-slate-400")
                     prog_display = f"{progress}/{int(target)}"
 
+                # Inline action per plan type
+                if p['target_type'] == 'habit' and p['target_id']:
+                    action = f"""
+                    <form hx-post='/api/habits/{p['target_id']}/check' hx-target='#habits-list' hx-swap='outerHTML'
+                          @submit="toast = 'Habit done ✓'" class='flex gap-1 items-center mt-2'>
+                        <input type='date' name='habit_date' class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1 text-white text-xs font-mono'>
+                        <button class='bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-3 py-1 rounded-lg'>✓ check</button>
+                        <span class='text-[10px] text-slate-500 ml-auto'><a href='#' @click.prevent="refreshTab('habits')" class='hover:text-emerald-400'>open habits →</a></span>
+                    </form>"""
+                elif p['target_type'] == 'expense':
+                    action = f"""
+                    <form hx-post='/api/expenses/' hx-target='#expenses-list' hx-swap='outerHTML'
+                          @submit="toast = 'Expense logged ✓'" class='flex gap-1 items-center mt-2'>
+                        <input type='number' step='0.01' name='amount' placeholder='€0.00' required
+                               class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1 text-white text-xs font-mono'>
+                        <input type='hidden' name='category' value="{p['target_name'] or 'Other'}">
+                        <input type='hidden' name='note' value="{p['goal_label']}">
+                        <input type='date' name='expense_date' class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1 text-white text-xs font-mono'>
+                        <button class='bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-3 py-1 rounded-lg'>log</button>
+                        <span class='text-[10px] text-slate-500 ml-auto'><a href='#' @click.prevent="refreshTab('expenses')" class='hover:text-emerald-400'>open expenses →</a></span>
+                    </form>"""
+                elif p['target_type'] == 'p2p':
+                    action = f"""
+                    <form hx-post='/api/p2p/orders' hx-target='#p2p-area' hx-swap='outerHTML'
+                          @submit="toast = 'Trade logged ✓'" class='flex gap-1 items-center mt-2'>
+                        <input type='number' step='0.01' name='receive_eur' placeholder='€50' required
+                               class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1 text-white text-xs font-mono'>
+                        <input type='number' step='0.01' name='sent_usdt' placeholder='USDT' required
+                               class='w-24 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1 text-white text-xs font-mono'>
+                        <input type='date' name='trade_date' class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1 text-white text-xs font-mono'>
+                        <button class='bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-3 py-1 rounded-lg'>log</button>
+                        <span class='text-[10px] text-slate-500 ml-auto'><a href='#' @click.prevent="refreshTab('p2p')" class='hover:text-emerald-400'>open P2P →</a></span>
+                    </form>"""
+                else:
+                    action = ""
+
                 html += f"""
                 <div class='bg-dark-900 border border-dark-700 rounded-xl p-4'>
                     <div class='flex justify-between items-start'>
                         <div>
                             <h4 class='font-semibold text-white text-sm'>{p['goal_label']}</h4>
-                            <p class='text-xs text-slate-400 mt-0.5'><span class='uppercase font-mono'>{p['target_type']}</span> • {p['frequency']}</p>
+                            <p class='text-xs text-slate-400 mt-0.5'><span class='uppercase font-mono'>{p['target_type']}</span> • {p['frequency']}{f" • <span class='text-slate-300'>{p['target_name']}</span>" if p['target_name'] else ""}</p>
                         </div>
                         <button hx-delete='/api/planner/{p['id']}' hx-target='#planner-list' class='text-slate-500 hover:text-red-400 p-1'>✕</button>
                     </div>
@@ -84,13 +226,12 @@ class PlannerPlugin(LifeOSPlugin):
                         </div>
                         <span class='ml-3 text-xs font-mono {color}'>{prog_display}</span>
                     </div>
+                    {action}
                 </div>
                 """
             html += "</div>"
-            return empty_html + html
+            return html
 
-        @router.get("/list", response_class=HTMLResponse)
-        def planner_list(request: Request):
             return planner_view(request)
 
         @router.post("/", response_class=HTMLResponse)
