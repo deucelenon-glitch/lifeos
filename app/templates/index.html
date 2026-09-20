@@ -40,6 +40,7 @@
         activeTab: 'home',
         toast: null,
         plannerTarget: 'habit',
+        showInstallBanner: false,
         refreshTab(tab) {
           this.activeTab = tab;
           this.pull(tab);
@@ -82,9 +83,27 @@
               this.pull(t);
             }
           }, 30000);
+        },
+        initInstallBanner() {
+          // Show a one-time "install as an app" nudge when LifeOS opens in a
+          // plain Chrome tab (not yet an installed app window).
+          try {
+            if (window.navigator.standalone) return;         // already an installed app window
+            if (localStorage.getItem('lifeos_install_seen')) return;  // already nudged once
+            const isStandaloneDisplay = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+            if (isStandaloneDisplay) return;                 // edge case: standalone without the flag
+            const isChrome = /Chrome\//.test(navigator.userAgent) && !/Android|CriOS/.test(navigator.userAgent);
+            if (!isChrome) return;                           // only desktop Chrome has the ⓘ install button
+            localStorage.setItem('lifeos_install_seen', '1');
+            this.showInstallBanner = true;
+          } catch (e) { /* never block the app */ }
+        },
+        dismissInstallBanner() {
+          this.showInstallBanner = false;
+          try { localStorage.setItem('lifeos_install_dismissed', '1'); } catch (e) {}
         }
       }"
-      x-init="initAutoRefresh()">
+      x-init="initAutoRefresh(); initInstallBanner()">
 
 <!-- ================= HEADER ================= -->
     <header class="border-b border-dark-700 bg-dark-900/90 backdrop-blur sticky top-0 z-50">
@@ -130,6 +149,20 @@
 
     <!-- ================= MAIN ================= -->
     <main class="max-w-6xl mx-auto px-4 py-5 space-y-6">
+
+        <!-- Install-as-app nudge (one-time, desktop Chrome tab only) -->
+        <template x-if="showInstallBanner">
+            <div class="flex items-center gap-3 justify-between bg-gradient-to-r from-emerald-600/15 to-dark-800 border border-emerald-500/40 rounded-xl px-4 py-3 text-sm">
+                <div class="flex items-center gap-2.5">
+                    <span class="text-xl">💠</span>
+                    <div>
+                        <p class="font-semibold text-emerald-300">Install LifeOS as an app</p>
+                        <p class="text-xs text-slate-300 mt-0.5">Open the ⋮ menu → <b>Cast, save and share…</b> → <b>Install page as app</b> → it gets its own window &amp; icon.</p>
+                    </div>
+                </div>
+                <button @click="dismissInstallBanner()" class="shrink-0 text-slate-400 hover:text-white p-1" title="Dismiss">✕</button>
+            </div>
+        </template>
 
         <!-- Toast -->
         <template x-if="toast">
