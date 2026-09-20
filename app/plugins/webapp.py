@@ -71,6 +71,20 @@ class WebAppPlugin(LifeOSPlugin):
                     GROUP BY category ORDER BY total DESC
                 """).fetchall()
 
+                # Capital: EUR + USD balances across accounts, combined total at live rate
+                acc_rows = conn.execute(
+                    "SELECT balance, currency FROM capital_accounts"
+                ).fetchall()
+                cap_eur = sum((r["balance"] or 0) for r in acc_rows if r["currency"] == "EUR")
+                cap_usd = sum((r["balance"] or 0) for r in acc_rows if r["currency"] == "USD")
+                try:
+                    from app.plugins.capital import _fx_eur_to_usd
+                    eur2usd = _fx_eur_to_usd()
+                except Exception:
+                    eur2usd = 1.08
+                cap_total_eur = cap_eur + (cap_usd / eur2usd if eur2usd else cap_usd)
+                cap_sub = f"€{cap_eur:.0f} + ${cap_usd:.0f} @ {eur2usd:.3f}" if acc_rows else "no accounts yet"
+
             card = lambda title, value, sub, accent="text-emerald-400", tag="" : f"""
             <div class='bg-dark-800/50 border border-dark-700 rounded-2xl p-4 flex flex-col gap-1'>
                 <span class='text-[10px] uppercase font-mono text-slate-400'>{title} {tag}</span>
@@ -96,6 +110,8 @@ class WebAppPlugin(LifeOSPlugin):
                 "🛰️ P2P", "ON" if p2p_on else "OFF", p2p_sub, "text-emerald-400" if p2p_on else "text-slate-400"
             ) + card(
                 "🤖 Bot", "Linked" if tg else "Unlinked", "telegram config", "text-emerald-400" if tg else "text-slate-400"
+            ) + card(
+                "🏦 Capital", f"€{cap_total_eur:,.0f}", cap_sub, "text-emerald-400"
             ) + f"""
             <div class='bg-dark-800/50 border border-dark-700 rounded-2xl p-4'>
                 <span class='text-[10px] uppercase font-mono text-slate-400'>🧩 Spend by Category (month)</span>
