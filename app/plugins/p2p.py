@@ -4,11 +4,19 @@ from app.plugins.base import LifeOSPlugin
 from datetime import datetime, timedelta
 import sqlite3
 
-class P2PPlugin(LifeOSPlugin):
-    """RoboSats order reminder tracker.
 
-    Reminds you to create a P2P order (amount in a configurable range, default 50-500 sats)
-    at a configurable interval. No trading logic — just nudge + log.
+def _round2(x: float) -> float:
+    return round(float(x) + 1e-9, 2)
+
+
+class P2PPlugin(LifeOSPlugin):
+    """USDT arbitrage ledger — P2P/OTC profit tracker.
+
+    Sheet math (user spreadsheet):
+        buy_usdt    = receive_eur * rate
+        profit_usd  = buy_usdt - sent_usdt
+    User sets the rate once, enters EUR received + USDT sent, everything else
+    is computed. Profit auto-feeds the Money/Cashflow plugin as daily income.
     """
 
     @property
@@ -19,34 +27,105 @@ class P2PPlugin(LifeOSPlugin):
         conn.execute("""
             CREATE TABLE IF NOT EXISTS p2p_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                interval_minutes INTEGER DEFAULT 480,   -- 8h
+                interval_minutes INTEGER DEFAULT 480,
+                rate REAL DEFAULT 1.15,
                 min_sats INTEGER DEFAULT 50,
                 max_sats INTEGER DEFAULT 500,
                 enabled INTEGER DEFAULT 1,
-                last_nudged_at DATETIME,                -- when we last pinged the user
+                last_nudged_at DATETIME,
                 updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS p2p_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                amount_sats INTEGER NOT NULL,
-                side TEXT DEFAULT 'buy',        -- buy | sell
+                receive_eur REAL NOT NULL DEFAULT 0,
+                buy_usdt REAL NOT NULL DEFAULT 0,
+                sent_usdt REAL NOT NULL DEFAULT 0,
+                profit_usd REAL NOT NULL DEFAULT 0,
+                rate REAL DEFAULT 1.15,
+                side TEXT DEFAULT 'buy',
                 note TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
-        # Seed default config
-        row = conn.execute("SELECT COUNT(*) FROM p2p_config").fetchone()
-        if not row or row[0] == 0:
-            conn.execute("INSERT INTO p2p_config (interval_minutes, min_sats, max_sats) VALUES (480, 50, 500)")
-
-        # Migration: ensure last_nudged_at column exists on pre-existing tables
-        cols = [c[1] for c in conn.execute("PRAGMA table_info(p2p_config)").fetchall()]
-        if "last_nudged_at" not in cols:
-            conn.execute("ALTER TABLE p2p_config ADD COLUMN last_nudged_at DATETIME")
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(p2p_orders)").fetchall()]
+        if "amount_sats" in cols and "receive_eur" not in cols:
+            # Legacy schema -> migrate preserving data
+            conn.execute("ALTER TABLE p2p_orders RENAME TO p2p_orders_legacy")
+            conn.execute("""
+                CREATE TABLE p2p_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    receive_eur REAL NOT NULL DEFAULT 0,
+                    buy_usdt REAL NOT NULL DEFAULT 0,
+                    sent_usdt REAL NOT NULL DEFAULT 0,
+                    profit_usd REAL NOT NULL DEFAULT 0,
+                    rate REAL DEFAULT 1.15,
+                    side TEXT DEFAULT 'buy',
+                    note TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("""
+                INSERT INTO p2p_orders (receive_eur, buy_usdt, sent_usdt, profit_usd, rate, side, note, created_at)
+                SELECT amount_sats, amount_sats * 1.15, amount_sats, 0, 1.15, side, note, created_at
+                FROM p2p_orders_legacy
+            """)
+            conn.execute("DROP TABLE p2p_orders_legacy")
             conn.commit()
 
+        cols = [c[1] for c in conn.execute("PRAGMA table_info(p2p_config)").fetchall()]
+        if "rate" not in cols:
+            conn.execute("ALTER TABLE p2p_config ADD COLUMN rate REAL DEFAULT 1.15")
+            conn.commit()
+
+        row = conn.execute("SELECT COUNT(*) FROM p2p_config").fetchone()
+        if not row or row[0] == 0:
+            conn.execute("INSERT INTO p2p_config (interval_minutes, rate, min_sats, max_sats) VALUES (480, 1.15, 50, 500)")
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+    def _cfg(self, conn):
+        return conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
+
+    def _rate(self, conn) -> float:
+        cfg = self._cfg(conn)
+        return float(cfg["rate"]) if cfg and cfg["rate"] else 1.15
+
+    def _orders(self, conn, limit: int = 200):
+        return conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+
+    def _totals(self, conn):
+        row = conn.execute("""
+            SELECT COALESCE(SUM(receive_eur),0) eur,
+                   COALESCE(SUM(buy_usdt),0)    buy,
+                   COALESCE(SUM(sent_usdt),0)   sent,
+                   COALESCE(SUM(profit_usd),0)  profit
+            FROM p2p_orders
+        """).fetchone()
+        return {
+            "eur": _round2(row["eur"]),
+            "buy": _round2(row["buy"]),
+            "sent": _round2(row["sent"]),
+            "profit": _round2(row["profit"]),
+        }
+
+    def _push_income_into_money(self, profit_usd: float, order_id: int = None):
+        """Link: P2P profit feeds the Money plugin as today's income (USD).
+        ref_id = order id so deleting a trade also removes its income entry."""
+        if not profit_usd:
+            return None
+        try:
+            from app.plugins.money import MoneyPlugin
+            return MoneyPlugin().record_income(profit_usd, source="p2p", note="P2P profit", ref_id=order_id)
+        except Exception as e:
+            print(f"[p2p] income push skipped: {e}")
+            return None
+
+    # ------------------------------------------------------------------
+    # routes
+    # ------------------------------------------------------------------
     def register_routes(self) -> APIRouter:
         router = APIRouter()
 
@@ -54,259 +133,237 @@ class P2PPlugin(LifeOSPlugin):
         def p2p_view(request: Request):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
-                cfg = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
-                orders = conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT 10").fetchall()
+                rate = self._rate(conn)
+                orders = self._orders(conn, 200)
+                totals = self._totals(conn)
 
-            interval = cfg["interval_minutes"] if cfg else 480
-            
-            # Generate the requested schedule format:
-            # Phase 1: €100 Increment Sequence (10:00 to 12:00)
-            # Phase 2: €50 Base Sequence (€50 Increments) (12:30 to 02:30)
-            schedule_html = """
-            <div class='space-y-4 text-xs font-mono'>
-                <div class='text-slate-300 font-sans font-medium mb-1'>Here is your schedule for posting the P2P orders in 30-minute intervals:</div>
-                
-                <div class='bg-dark-950/60 p-3 rounded-xl border border-dark-800 space-y-1.5'>
-                    <div class='text-emerald-400 font-bold'>Phase 1: €100 Increment Sequence</div>
-                    <div class='text-slate-300 pl-2 space-y-1'>
-                        <div>• 10:00 AM – Post €100 P2P Order</div>
-                        <div>• 10:30 AM – Post €200 P2P Order</div>
-                        <div>• 11:00 AM – Post €300 P2P Order</div>
-                        <div>• 11:30 AM – Post €400 P2P Order</div>
-                        <div>• 12:00 PM – Post €500 P2P Order</div>
-                    </div>
-                </div>
-
-                <div class='bg-dark-950/60 p-3 rounded-xl border border-dark-800 space-y-1.5'>
-                    <div class='text-emerald-400 font-bold'>Phase 2: €50 Base Sequence (€50 Increments)</div>
-                    <div class='text-slate-300 pl-2 space-y-1'>
-                        <div>• 12:30 PM – Post €50 P2P Order</div>
-                        <div>• 01:00 PM – Post €150 P2P Order</div>
-                        <div>• 01:30 PM – Post €250 P2P Order</div>
-                        <div>• 02:00 PM – Post €350 P2P Order</div>
-                        <div>• 02:30 PM – Post €450 P2P Order</div>
-                    </div>
-                </div>
-            </div>
-            """
+            rows_html = ""
+            for o in orders:
+                profit = _round2(o["profit_usd"])
+                cls = "text-emerald-400" if profit >= 0 else "text-red-400"
+                rows_html += f"""
+                <tr class='border-b border-dark-800/60'>
+                    <td class='px-2 py-1.5 text-slate-500 font-mono'>{str(o['created_at'])[:10]}</td>
+                    <td class='px-2 py-1.5 text-slate-400 font-mono'>{o['note'] or ''}</td>
+                    <td class='px-2 py-1.5 text-white font-mono text-right'>{o['receive_eur']:.2f}</td>
+                    <td class='px-2 py-1.5 text-emerald-300 font-mono text-right'>{o['buy_usdt']:.2f}</td>
+                    <td class='px-2 py-1.5 text-amber-300 font-mono text-right'>{o['sent_usdt']:.2f}</td>
+                    <td class='px-2 py-1.5 {cls} font-mono text-right'>{'+' if profit >= 0 else ''}{profit:.2f}</td>
+                    <td class='px-2 py-1.5 text-slate-500 font-mono text-right'>{o['rate']:.3f}</td>
+                    <td class='px-2 py-1.5'>
+                        <button hx-delete='/api/p2p/orders/{o['id']}' hx-target='#p2p-area' hx-swap='outerHTML'
+                                class='text-slate-500 hover:text-red-400 text-xs'>✕</button>
+                    </td>
+                </tr>"""
 
             html = f"""
             <div class='space-y-4'>
-                <!-- Status card -->
-                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <div class='flex justify-between items-start'>
-                        <div>
-                            <h3 class='font-bold text-white text-sm'>RoboSats Order Schedule</h3>
-                            <p class='text-xs text-slate-400 mt-0.5'>Interval: {interval} min • Active sequence</p>
-                        </div>
-                        <span class='text-xs px-2 py-1 rounded-full bg-emerald-600/20 text-emerald-400 font-mono'>{"ON" if cfg and cfg['enabled'] else "OFF"}</span>
+                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4 grid grid-cols-2 md:grid-cols-4 gap-3'>
+                    <div>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Live Rate</div>
+                        <div class='text-lg font-bold text-white font-mono'>{rate:.3f}</div>
+                        <form hx-post='/api/p2p/config' hx-target='#p2p-area' hx-swap='outerHTML' class='flex mt-1'>
+                            <input type='number' step='0.001' name='rate' value='{rate:.3f}' min='0.5' max='3'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-1.5 py-1 text-white text-xs font-mono text-center'>
+                            <button type='submit' class='bg-dark-800 hover:bg-dark-700 text-emerald-400 text-xs px-2 rounded-lg shrink-0'>set</button>
+                        </form>
+                    </div>
+                    <div>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Total Profit</div>
+                        <div class='text-lg font-bold {"text-emerald-400" if totals["profit"] >= 0 else "text-red-400"} font-mono'>${totals['profit']:.2f}</div>
+                        <div class='text-[10px] text-slate-500'>{len(orders)} trades</div>
+                    </div>
+                    <div>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>EUR In</div>
+                        <div class='text-lg font-bold text-white font-mono'>€{totals['eur']:.2f}</div>
+                        <div class='text-[10px] text-slate-500'>→ {totals['buy']:.2f} USDT</div>
+                    </div>
+                    <div>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>USDT Sent</div>
+                        <div class='text-lg font-bold text-white font-mono'>{totals['sent']:.2f}</div>
+                        <div class='text-[10px] text-slate-500'>spread {totals['buy'] - totals['sent']:.2f}</div>
                     </div>
                 </div>
 
-                <!-- Schedule Display -->
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    {schedule_html}
-                </div>
-
-                <!-- Log order -->
-                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>Log Order Posted</h4>
-                    <form hx-post='/api/p2p/orders' hx-target='#p2p-area' hx-swap='outerHTML' @submit="toast = 'Order logged!'" class='space-y-2'>
-                        <div class='grid grid-cols-3 gap-2'>
-                            <input type='number' name='amount_sats' placeholder='sats/€' required
-                                   class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-center text-sm placeholder-slate-500'>
-                            <select name='side' class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
-                                <option value='buy'>Buy</option>
-                                <option value='sell'>Sell</option>
-                            </select>
-                            <input type='text' name='note' placeholder='note'
-                                   class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm placeholder-slate-500'>
+                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>+ Log Trade</h4>
+                    <form hx-post='/api/p2p/orders' hx-target='#p2p-area' hx-swap='outerHTML'
+                          @submit="toast = 'Trade logged ✓ — profit auto-fed to Money'"
+                          class='grid grid-cols-2 md:grid-cols-5 gap-2 items-end'>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Receive EUR</label>
+                            <input type='number' step='0.01' name='receive_eur' placeholder='50' required
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono text-center' id='p2p-receive'>
                         </div>
-                        <button type='submit' class='w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-xl text-sm'>✓ Post Order</button>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Sent USDT</label>
+                            <input type='number' step='0.01' name='sent_usdt' placeholder='53.5' required
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono text-center' id='p2p-sent'>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Note (owner)</label>
+                            <input type='text' name='note' placeholder='dex' value='dex'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
+                        </div>
+                        <div class='bg-dark-950 rounded-lg px-2 py-2 text-center'>
+                            <div class='text-[10px] uppercase font-mono text-slate-400'>Buy USDT</div>
+                            <span class='text-emerald-300 font-mono text-sm font-bold' id='p2p-buy-preview'>—</span>
+                        </div>
+                        <div class='bg-dark-950 rounded-lg px-2 py-2 text-center'>
+                            <div class='text-[10px] uppercase font-mono text-slate-400'>Profit</div>
+                            <span class='text-emerald-300 font-mono text-sm font-bold' id='p2p-profit-preview'>—</span>
+                        </div>
+                        <button type='submit' class='col-span-2 md:col-span-5 w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-xl text-sm mt-1'>✓ Log Trade (rate {rate:.3f})</button>
                     </form>
+                    <script>
+                        (function () {{
+                            const rate = {rate};
+                            const recv = document.getElementById('p2p-receive');
+                            const sent = document.getElementById('p2p-sent');
+                            const buyP = document.getElementById('p2p-buy-preview');
+                            const profP = document.getElementById('p2p-profit-preview');
+                            const up = () => {{
+                                const r = parseFloat(recv.value) || 0;
+                                const s = parseFloat(sent.value) || 0;
+                                const b = r * rate;
+                                buyP.textContent = b.toFixed(2);
+                                const p = b - s;
+                                profP.textContent = (p >= 0 ? '+' : '') + p.toFixed(2);
+                                profP.className = p >= 0 ? 'text-emerald-300 font-mono text-sm font-bold' : 'text-red-400 font-mono text-sm font-bold';
+                            }};
+                            recv.oninput = up; sent.oninput = up;
+                        }})();
+                    </script>
                 </div>
 
-                <!-- Recent orders -->
-                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <h4 class='font-semibold text-white text-xs uppercase mb-2'>Recent Orders</h4>
-                    {"".join(
-                        f"<div class='flex justify-between text-xs py-1.5'><span class='font-mono text-emerald-400'>{o['amount_sats']}</span>"
-                        f"<span class='text-slate-400'>{o['side']}</span><span class='text-slate-500 font-mono'>{o['created_at']}</span></div>"
-                        for o in orders
-                    ) if orders else "<p class='text-slate-500 text-xs py-2'>No orders logged yet.</p>"}
+                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4 overflow-x-auto'>
+                    <h4 class='font-semibold text-white text-xs uppercase mb-2'>Ledger ({len(orders)})</h4>
+                    <table class='w-full text-xs'>
+                        <thead>
+                            <tr class='text-slate-500 uppercase font-mono text-[10px] border-b border-dark-700'>
+                                <th class='px-2 py-1.5 text-left'>date</th>
+                                <th class='px-2 py-1.5 text-left'>owner</th>
+                                <th class='px-2 py-1.5 text-right'>Recv €</th>
+                                <th class='px-2 py-1.5 text-right'>Buy USDT</th>
+                                <th class='px-2 py-1.5 text-right'>Sent USDT</th>
+                                <th class='px-2 py-1.5 text-right'>Profit $</th>
+                                <th class='px-2 py-1.5 text-right'>rate</th>
+                                <th class='px-2 py-1.5'></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {rows_html if rows_html else "<tr><td colspan='8' class='px-2 py-4 text-slate-500 text-center'>No trades yet — log your first one above.</td></tr>"}
+                        </tbody>
+                    </table>
+                    <div class='text-[10px] text-slate-500 mt-1 font-mono'>profit = (receive × rate) − sent · profits feed 💰 Money as daily income</div>
                 </div>
             </div>
             """
             return html
 
         @router.post("/config", response_class=HTMLResponse)
-        def save_config(
-            request: Request,
-            interval_minutes: int = Form(...),
-            min_sats: int = Form(...),
-            max_sats: int = Form(...),
-        ):
+        def save_config(request: Request, rate: float = Form(...)):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
-                conn.execute("DELETE FROM p2p_config")
-                conn.execute(
-                    "INSERT INTO p2p_config (interval_minutes, min_sats, max_sats, enabled) VALUES (?, ?, ?, 1)",
-                    (interval_minutes, min_sats, max_sats),
-                )
-            return p2p_view(request)
-
-        @router.post("/toggle", response_class=HTMLResponse)
-        def toggle(request: Request):
-            from app.database import db as global_db
-            with global_db.get_connection() as conn:
-                conn.execute("UPDATE p2p_config SET enabled = 1 - enabled WHERE id = (SELECT MAX(id) FROM p2p_config)")
+                cfg = self._cfg(conn)
+                if cfg:
+                    conn.execute("UPDATE p2p_config SET rate = ? WHERE id = ?", (rate, cfg["id"]))
+                else:
+                    conn.execute("INSERT INTO p2p_config (interval_minutes, rate) VALUES (480, ?)", (rate,))
             return p2p_view(request)
 
         @router.post("/orders", response_class=HTMLResponse)
-        def log_order(request: Request, amount_sats: int = Form(...), side: str = Form("buy"), note: str = Form("")):
+        def log_order(
+            request: Request,
+            receive_eur: float = Form(...),
+            sent_usdt: float = Form(0),
+            note: str = Form(""),
+        ):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
-                conn.execute(
-                    "INSERT INTO p2p_orders (amount_sats, side, note) VALUES (?, ?, ?)",
-                    (amount_sats, side, note),
+                live_rate = self._rate(conn)
+                buy = _round2(receive_eur * live_rate)
+                profit = _round2(buy - sent_usdt)
+                cur = conn.execute(
+                    "INSERT INTO p2p_orders (receive_eur, buy_usdt, sent_usdt, profit_usd, rate, note) VALUES (?, ?, ?, ?, ?, ?)",
+                    (receive_eur, buy, sent_usdt, profit, live_rate, note),
                 )
+                order_id = cur.lastrowid
+            self._push_income_into_money(profit, order_id=order_id)
+
+        @router.delete("/orders/{order_id}", response_class=HTMLResponse)
+        def delete_order(request: Request, order_id: int):
+            from app.database import db as global_db
+            with global_db.get_connection() as conn:
+                conn.execute("DELETE FROM p2p_orders WHERE id = ?", (order_id,))
+            self._unpush_income_from_money(order_id)
             return p2p_view(request)
 
-        # JSON API
-        @router.get("/status")
-        def status_api():
+        @router.get("/data")
+        def orders_api():
             from app.database import db as global_db
             with global_db.get_connection() as conn:
-                cfg = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
-                last = conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT 1").fetchone()
-            due, next_in = self._status(cfg, last)
-            return {
-                "enabled": bool(cfg and cfg["enabled"]),
-                "interval_minutes": cfg["interval_minutes"] if cfg else 480,
-                "min_sats": cfg["min_sats"] if cfg else 50,
-                "max_sats": cfg["max_sats"] if cfg else 500,
-                "due": due,
-                "next_in": next_in,
-            }
+                return {
+                    "rate": self._rate(conn),
+                    "orders": [dict(r) for r in self._orders(conn, 500)],
+                    "totals": self._totals(conn),
+                }
 
         return router
 
-    def _status(self, cfg, last) -> tuple:
-        """Return (status_text, next_reminder_text)."""
-        if not cfg or not cfg["enabled"]:
-            return "Reminder paused.", "—"
-        interval = cfg["interval_minutes"]
-        if not last:
-            return "No orders yet — time to post your first one!", "now 🎯"
-        created = datetime.fromisoformat(last["created_at"].replace("Z", "")) if isinstance(last["created_at"], str) else last["created_at"]
-        elapsed = datetime.now() - created
-        remaining = timedelta(minutes=interval) - elapsed
-        if remaining.total_seconds() <= 0:
-            return f"⏰ Order due! Last was {last['amount_sats']} sats {int(elapsed.total_seconds() // 3600)}h ago.", "NOW ⏰"
-        mins = int(remaining.total_seconds() // 60)
-        hrs, m = divmod(mins, 60)
-        return f"Next order window opens in {hrs}h{m:02d}m.", f"in {hrs}h{m:02d}m"
-
-    def reminder_due(self) -> bool:
-        """Called by the periodic worker — True if an order nudge SHOULD FIRE (and hasn't already)."""
-        from app.database import Database
-        from datetime import datetime, timedelta
-        db = Database()
-        with db.get_connection() as conn:
-            cfg = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
-            last = conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT 1").fetchone()
-        if not cfg or not cfg["enabled"]:
-            return False
-
-        def _parse(ts):
-            try:
-                return datetime.fromisoformat(str(ts).replace("Z", ""))
-            except (ValueError, TypeError):
-                return datetime.min
-
-        # Not due while inside an interval measured from the LAST NUDGE
-        if cfg["last_nudged_at"]:
-            since_nudge = (datetime.now() - _parse(cfg["last_nudged_at"])).total_seconds() / 60
-            if since_nudge < cfg["interval_minutes"]:
-                return False
-
-        if not last:
-            return True  # no orders ever — first nudge
-        created = _parse(last["created_at"])
-        return (datetime.now() - created) >= timedelta(minutes=cfg["interval_minutes"])
-
-    def mark_nudged(self):
-        """Record that we sent the nudge so we don't spam."""
-        from app.database import Database
-        db = Database()
-        with db.get_connection() as conn:
-            conn.execute("UPDATE p2p_config SET last_nudged_at = datetime('now') WHERE id = (SELECT MAX(id) FROM p2p_config)")
-
-    def periodic_check(self):
-        """Worker calls this periodically; when due, fire a Termux/Telegram nudge ONCE.
-        Returns True if a nudge was sent (cooldown bookkeeping lives here)."""
-        if not self.reminder_due():
-            return False
-        from app.utils.notifications import send_termux, send_telegram
-        from app.database import Database
-        db = Database()
-        with db.get_connection() as conn:
-            cfg = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
-        msg = f"⏰ P2P ORDER DUE — post {cfg['min_sats']}-{cfg['max_sats']} sats on RoboSats"
-        termux_ok = send_termux("LifeOS P2P", msg, "urgent")
-        tg_ok = False
+    def _unpush_income_from_money(self, order_id: int):
+        """On delete: remove the linked income entry so Money stays consistent."""
         try:
-            with db.get_connection() as conn:
-                row = conn.execute("SELECT bot_token, chat_id FROM telegram_config ORDER BY id DESC LIMIT 1").fetchone()
-            if row:
-                tg_ok = send_telegram(row["bot_token"], row["chat_id"], msg)
-        except Exception:
-            pass
-        if termux_ok or tg_ok:
-            self.mark_nudged()
-            print(f"[p2p] nudge sent (termux={termux_ok}, tg={tg_ok})")
-            return True
-        return False
+            from app.plugins.money import MoneyPlugin
+            MoneyPlugin().remove_income_ref(order_id, source="p2p")
+        except Exception as e:
+            print(f"[p2p] income unlink skipped: {e}")
+
+    def _status(self, cfg, last) -> tuple:
+        return "Ledger active — log trades above.", "—"
 
     def menu(self) -> dict:
-        return {"id": self.name, "icon": "🛰️", "label": "P2P Order Reminder", "badge": "", "view": "/api/p2p/view"}
+        return {"id": self.name, "icon": "🛰️", "label": "P2P Ledger", "badge": "", "view": "/api/p2p/view"}
 
     def bot_commands(self) -> dict:
         def cmd_p2p(chat_id, parts):
             from app.database import Database
             db = Database()
             with db.get_connection() as conn:
-                cfg = conn.execute("SELECT * FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
-            due, next_in = self._status(cfg, self._last_order())
-            return (f"*P2P Reminder*\n"
-                    f"Interval: {cfg['interval_minutes']} min\n"
-                    f"Range: {cfg['min_sats']}-{cfg['max_sats']} sats\n"
-                    f"Status: {'ON' if cfg['enabled'] else 'OFF'}\n"
-                    f"Next: {next_in}")
+                t = self._totals(conn)
+                n = conn.execute("SELECT COUNT(*) c FROM p2p_orders").fetchone()["c"]
+            return (f"*P2P Ledger*\n"
+                    f"Trades: {n}\n"
+                    f"Profit: ${t['profit']:.2f}\n"
+                    f"EUR in: €{t['eur']:.2f} → {t['buy']:.2f} USDT")
 
-        def cmd_log_order(chat_id, parts):
-            # /order 300 buy   or   /order 150
-            if len(parts) < 2:
-                return "Usage: /order <sats> [buy|sell] [note]"
+        def cmd_order(chat_id, parts):
+            # /order <receive_eur> <sent_usdt> [note]
+            if len(parts) < 3:
+                return "Usage: /order <receive_eur> <sent_usdt> [note]  →  e.g. /order 50 53.5 dex"
             try:
-                amount = int(parts[1])
+                recv = float(parts[1]); sent = float(parts[2])
             except ValueError:
-                return "Amount must be a number: /order 300 buy"
-            side = parts[2].lower() if len(parts) >= 3 and parts[2].lower() in ("buy", "sell") else "buy"
+                return "Amounts must be numbers: /order 50 53.5"
             note = " ".join(parts[3:])
             from app.database import Database
             db = Database()
             with db.get_connection() as conn:
-                conn.execute("INSERT INTO p2p_orders (amount_sats, side, note) VALUES (?, ?, ?)", (amount, side, note))
-            return f"✅ Order logged: {amount} sats ({side})"
+                rate = self._rate(conn)
+                buy = _round2(recv * rate)
+                profit = _round2(buy - sent)
+                conn.execute(
+                    "INSERT INTO p2p_orders (receive_eur, buy_usdt, sent_usdt, profit_usd, rate, note) VALUES (?, ?, ?, ?, ?, ?)",
+                    (recv, buy, sent, profit, rate, note),
+                )
+            self._push_income_into_money(profit)
+            return f"✅ Logged: €{recv:.2f} @ {rate:.3f} → {buy:.2f} USDT, sent {sent:.2f}, profit ${profit:.2f}"
 
-        return {"p2p": cmd_p2p, "order": cmd_log_order}
+        return {"p2p": cmd_p2p, "order": cmd_order}
 
-    def _last_order(self):
-        from app.database import Database
-        db = Database()
-        with db.get_connection() as conn:
-            return conn.execute("SELECT * FROM p2p_orders ORDER BY id DESC LIMIT 1").fetchone()
+    def periodic_check(self):
+        """Nothing time-critical for the ledger; kept for worker compat."""
+        return False
 
     def get_dashboard_widgets(self) -> list:
         return []

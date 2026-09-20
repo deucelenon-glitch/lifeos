@@ -54,6 +54,9 @@
             <button @click="activeTab = 'expenses'"
                     :class="activeTab === 'expenses' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">💰 Expenses</button>
+            <button @click="activeTab = 'money'"
+                    :class="activeTab === 'money' ? 'tab-active' : 'tab-inactive'"
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">💵 Cashflow</button>
             <button @click="activeTab = 'planner'"
                     :class="activeTab === 'planner' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🗓️ Planner</button>
@@ -199,6 +202,17 @@
             </div>
             <div id="p2p-area" hx-get="/api/p2p/view" hx-trigger="load">
                 <div class="text-slate-500 py-8 text-center text-sm">Loading P2P schedule…</div>
+            </div>
+        </div>
+
+        <!-- ============ MONEY TAB ============ -->
+        <div x-show="activeTab === 'money'" x-cloak class="space-y-5">
+            <div class="mb-2">
+                <h2 class="font-bold text-lg text-white">💵 Money &amp; Cashflow</h2>
+                <p class="text-xs text-slate-400 mt-0.5">Rent, daily income &amp; budget — alerts when over, praise when under.</p>
+            </div>
+            <div id="money-area" hx-get="/api/money/view" hx-trigger="load">
+                <div class="text-slate-500 py-8 text-center text-sm">Loading cashflow…</div>
             </div>
         </div>
 

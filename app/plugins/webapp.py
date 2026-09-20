@@ -88,7 +88,7 @@ class WebAppPlugin(LifeOSPlugin):
             entries = []
             app = request.app
             plugins = getattr(app.state, "plugins", {})
-            for name in ["habits", "expenses", "planner", "p2p", "telegram"]:
+            for name in ["habits", "expenses", "planner", "p2p", "money", "telegram"]:
                 p = plugins.get(name)
                 if p is None:
                     continue
@@ -98,7 +98,7 @@ class WebAppPlugin(LifeOSPlugin):
                     entries.append(entry)
             # Any extra plugins not in the preferred order get appended after
             for name, p in plugins.items():
-                if name in {"habits", "expenses", "planner", "p2p", "telegram", "webapp"}:
+                if name in {"habits", "expenses", "planner", "p2p", "money", "telegram", "webapp"}:
                     continue
                 m = p.menu()
                 for entry in (m if isinstance(m, list) else [m]):
