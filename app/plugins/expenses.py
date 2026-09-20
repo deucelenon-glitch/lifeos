@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from app.plugins.base import LifeOSPlugin
+from datetime import datetime, timezone
 import sqlite3
 
 class ExpensesPlugin(LifeOSPlugin):
@@ -115,7 +116,9 @@ class ExpensesPlugin(LifeOSPlugin):
         """Programmatic expense creation (used by habits one-click buttons).
         Doesn't need HTTP request/response, just logs + deducts from capital."""
         from app.database import db as global_db
-        date_val = (expense_date or "").strip() or "date('now')"
+        date_val = (expense_date or "").strip()
+        if not date_val or date_val == "date('now')":
+            date_val = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         source = (source_account or "").strip() or None
         with global_db.get_connection() as conn:
             cur = conn.execute(
@@ -196,7 +199,9 @@ class ExpensesPlugin(LifeOSPlugin):
             source_account: str = Form(""),
         ):
             from app.database import db as global_db
-            expense_date = (expense_date or "").strip() or "date('now')"
+            expense_date = (expense_date or "").strip()
+            if not expense_date or expense_date == "date('now')":
+                expense_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             source = (source_account or "").strip() or None
             with global_db.get_connection() as conn:
                 cur = conn.execute(

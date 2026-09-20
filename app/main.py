@@ -1,10 +1,38 @@
 import importlib
 import pkgutil
+import threading
+import time
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import db
 from app.plugins.base import LifeOSPlugin
+
+
+def _worker_loop(app):
+    """Background worker: runs every plugin's periodic_check() + termux collect.
+
+    Fires:
+      · termux  — collect_once() (auto-log expowatch notifications)
+      · money   — budget/rent alerts
+      · notes   — due reminders
+      · ...     — any plugin with a periodic_check
+    """
+    with app.state.worker_lock:
+        plugins = dict(app.state.plugins)
+    while True:
+        try:
+            for name, p in plugins.items():
+                if not hasattr(p, "periodic_check"):
+                    continue
+                try:
+                    p.periodic_check()
+                except Exception as e:
+                    print(f"[worker] {name} periodic_check error: {e}")
+        except Exception as e:
+            print(f"[worker] loop error: {e}")
+        time.sleep(60)
+
 
 def create_app() -> FastAPI:
     app = FastAPI(
@@ -24,6 +52,10 @@ def create_app() -> FastAPI:
 
     # Discover and load plugins dynamically
     load_plugins(app)
+
+    # Background worker: periodic_check + termux collection every 60s
+    app.state.worker_lock = threading.Lock()
+    threading.Thread(target=_worker_loop, args=(app,), daemon=True).start()
 
     @app.get("/api/status")
     def status():

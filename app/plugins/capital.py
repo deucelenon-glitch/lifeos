@@ -91,14 +91,14 @@ class CapitalPlugin(LifeOSPlugin):
         if "label" not in cols:
             conn.execute("ALTER TABLE capital_accounts ADD COLUMN label TEXT")
 
-        row = conn.execute("SELECT COUNT(*) FROM capital_accounts").fetchone()
-        if not row or row[0] == 0:
-            for key, meta in PLATFORMS.items():
+        existing = {r[0] for r in conn.execute("SELECT platform FROM capital_accounts")}
+        for key, meta in PLATFORMS.items():
+            if key not in existing:
                 conn.execute(
                     "INSERT INTO capital_accounts (platform, label, balance, currency, note) VALUES (?, ?, 0, ?, 'seed')",
                     (key, meta["label"], meta["currency"]),
                 )
-            conn.commit()
+        conn.commit()
 
     # ------------------------------------------------------------------
     # helpers
@@ -161,18 +161,18 @@ class CapitalPlugin(LifeOSPlugin):
                 </div>"""
 
             html = f"""
-            <div id='capital-area' hx-get='/api/capital/view' hx-trigger='load'>
+            <div id='capital-area'>
             <div class='space-y-4'>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4 grid grid-cols-2 md:grid-cols-4 gap-3'>
                     <div>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>💶 EUR</div>
                         <div class='text-lg font-bold text-white font-mono'>€{sums['eur']:.2f}</div>
-                        <div class='text-[10px] text-slate-500'>UniCredit + Wise</div>
+                        <div class='text-[10px] text-slate-500'>All EUR accounts</div>
                     </div>
                     <div>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>💵 USD</div>
                         <div class='text-lg font-bold text-white font-mono'>${sums['usd']:.2f}</div>
-                        <div class='text-[10px] text-slate-500'>Bybit + Phoenix + MEXC</div>
+                        <div class='text-[10px] text-slate-500'>All USD accounts</div>
                     </div>
                     <div>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>🌍 Total (EUR)</div>
@@ -188,8 +188,23 @@ class CapitalPlugin(LifeOSPlugin):
 
                 <div class='grid gap-3 md:grid-cols-2 lg:grid-cols-3'>
                     {cards}
-                    <div class='bg-dark-950 border border-dashed border-dark-700 rounded-xl p-4 flex items-center justify-center text-center'>
-                        <span class='text-slate-500 text-xs'>Add another account?<br><span class='text-[10px]'>contact your operator</span></span>
+                    <div class='bg-dark-950 border border-dashed border-dark-700 rounded-xl p-4 flex flex-col items-center justify-center text-center'>
+                        <div class='text-slate-500 text-xs font-medium mb-2'>➕ New account</div>
+                        <form hx-post='/api/capital/accounts' hx-target='#capital-area' hx-swap='outerHTML'
+                              @submit="toast = 'Account added ✓'"
+                              class='grid grid-cols-2 gap-1 w-full'>
+                            <input type='text' name='label' placeholder='Label' required
+                                   class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs'>
+                            <input type='text' name='platform' placeholder='e.g. binance' 
+                                   class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs'>
+                            <select name='currency' class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs'>
+                                <option value='USD'>USD $</option>
+                                <option value='EUR'>EUR €</option>
+                            </select>
+                            <input type='number' step='0.01' name='balance' placeholder='0.00'
+                                   class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs'>
+                            <button class='bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium px-3 py-1.5 rounded-lg w-full mt-0.5'>Add</button>
+                        </form>
                     </div>
                 </div>
             </div>
@@ -226,6 +241,36 @@ class CapitalPlugin(LifeOSPlugin):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 conn.execute("DELETE FROM capital_accounts WHERE id = ?", (account_id,))
+                conn.commit()
+            return capital_view(request)
+
+        @router.post("/accounts", response_class=HTMLResponse)
+        def create_account(
+            request: Request,
+            label: str = Form(...),
+            platform: str = Form(""),
+            currency: str = Form("USD"),
+            balance: float = Form(0.0),
+        ):
+            """Create a new account, either from a known platform or a custom one."""
+            from app.database import db as global_db
+            platform = platform.strip().lower()
+            meta = PLATFORMS.get(platform)
+            if meta:
+                # Known platform → use its canonical currency unless user overrode it
+                currency = meta["currency"]
+                label = label.strip() or meta["label"]
+            else:
+                # Custom platform → derive platform slug from label if left blank
+                platform = platform or label.strip().lower().replace(" ", "_")
+                label = label.strip() or platform
+            if not platform:
+                platform = label.strip().lower().replace(" ", "_")
+            with global_db.get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO capital_accounts (platform, label, balance, currency, note) VALUES (?, ?, ?, ?, 'user')",
+                    (platform, label, balance, currency),
+                )
                 conn.commit()
             return capital_view(request)
 

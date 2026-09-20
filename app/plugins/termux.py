@@ -410,7 +410,7 @@ class TermuxPlugin(LifeOSPlugin):
                 acc_opts += f"<option value='{platform}'{sel}>{label} ({cur})</option>"
 
             html = f"""
-            <div id='termux-area' hx-get='/api/termux/view' hx-trigger='load'>
+            <div id='termux-area'>
             <div class='space-y-4'>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <div class='flex justify-between items-center'>
