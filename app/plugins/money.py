@@ -177,12 +177,19 @@ class MoneyPlugin(LifeOSPlugin):
             due_day = cfg["rent_due_day"] or 1
             cur = cfg["currency"] or "€"
             state = self._budget_state(burn, budget)
+            income_goal = cfg["income_goal"] or 0
             today_d = datetime.now().day
+            # Plan check: does the planned monthly budget fit the income goal?
+            plan_delta = _r2(budget - income_goal) if income_goal > 0 else 0.0
+            plan_over = bool(income_goal > 0 and budget > income_goal)
             result = {
                 "state": state,
                 "burn": burn,
                 "income": income,
                 "budget": budget,
+                "income_goal": income_goal,
+                "plan_over": plan_over,
+                "plan_delta": plan_delta,
                 "rent": rent,
                 "due_day": due_day,
                 "days_to_rent": max(due_day - today_d, 0),
@@ -215,8 +222,12 @@ class MoneyPlugin(LifeOSPlugin):
                     self._mark_alert(conn, "under_budget", period, msg)
                     msgs.append(msg)
 
-                if state != prev:
-                    conn.execute("UPDATE money_config SET alert_state = ? WHERE id = ?", (state, cfg["id"]))
+                # plan check — monthly budget vs income goal (once/month)
+                if result["plan_over"] and not self._alert_sent(conn, "budget_over_income", period):
+                    msg = (f"⚠️ PLAN CHECK — budget {cur}{budget:.2f} exceeds income goal {cur}{income_goal:.2f} "
+                           f"by {cur}{result['plan_delta']:.2f}. Trim the budget or raise income.")
+                    self._mark_alert(conn, "budget_over_income", period, msg)
+                    msgs.append(msg)
 
                 if msgs:
                     self._notify("💰 Cashflow", "\n".join(msgs), conn)
@@ -247,6 +258,49 @@ class MoneyPlugin(LifeOSPlugin):
             due_day = cfg["rent_due_day"] or 1
             cur = cfg["currency"] or "€"
             today_d = datetime.now().day
+
+            # ---- plan feasibility: budget vs income goal ----
+            plan_delta = _r2(budget - income_goal) if income_goal > 0 else 0.0
+            plan_over = bool(income_goal > 0 and budget > income_goal)
+            if plan_over:
+                plan_txt = f"⚠️ Budget {cur}{budget:.2f} > income goal {cur}{income_goal:.2f} — short {cur}{plan_delta:.2f}/mo"
+                plan_cls = "text-red-400"
+            elif income_goal > 0:
+                plan_txt = f"✅ Plan OK — saving {cur}{_r2(income_goal - budget):.2f}/mo"
+                plan_cls = "text-emerald-400"
+            else:
+                plan_txt = "Set an income goal to check if the budget fits"
+                plan_cls = "text-slate-400"
+
+            # ---- runway: capital ÷ (budget − income) = months of sustain ----
+            sustain_capital = 0.0
+            try:
+                from app.plugins.capital import CapitalPlugin
+                with global_db.get_connection() as conn:
+                    sustain_capital = CapitalPlugin()._sums(conn)["total_eur"]
+            except Exception:
+                pass
+            net_burn = _r2(budget - income) if budget > 0 else 0.0  # planned spend − actual income so far
+            if sustain_capital > 0 and net_burn > 0:
+                runway_months = sustain_capital / net_burn
+                if runway_months >= 3:
+                    runway_txt = f"🛟 {runway_months:.1f} months (€{sustain_capital:.0f} cap ÷ €{net_burn:.2f}/mo net burn)"
+                    runway_cls = "text-emerald-400"
+                elif runway_months > 0:
+                    runway_txt = f"⚠️ Only {runway_months:.1f} months left (€{sustain_capital:.0f} ÷ €{net_burn:.2f}/mo)"
+                    runway_cls = "text-amber-400"
+                else:
+                    runway_txt = "Negative net burn — income covers the plan"
+                    runway_cls = "text-emerald-400"
+            elif budget <= 0:
+                runway_txt = "Set a monthly budget to see runway"
+                runway_cls = "text-slate-400"
+            elif income >= budget:
+                runway_txt = "Income ≥ budget — plan self-sustaining 🛟"
+                runway_cls = "text-emerald-400"
+            else:
+                runway_txt = "No capital tracked — add accounts in 🏦 Capital"
+                runway_cls = "text-slate-400"
 
             # Income goal progress & daily target (assuming ~30 days in month)
             days_in_month = 30
@@ -322,7 +376,7 @@ class MoneyPlugin(LifeOSPlugin):
                 </div>"""
 
             html = f"""
-            <div id='money-area' hx-get='/api/money/view' hx-trigger='load'>
+            <div id='money-area'>
             <div class='space-y-4'>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <div class='flex justify-between items-center'>
@@ -359,6 +413,14 @@ class MoneyPlugin(LifeOSPlugin):
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Budget</div>
                         <div class='text-xl font-bold text-white font-mono'>{cur}{budget:.2f}</div>
                         <div class='text-[10px] text-slate-500'>{("over by " + cur + f"{_r2(burn - budget):.2f}") if budget and burn > budget else "set in config"}</div>
+                    </div>
+                    <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Plan check</div>
+                        <div class='text-xs font-bold {plan_cls} font-mono'>{plan_txt}</div>
+                    </div>
+                    <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Runway</div>
+                        <div class='text-xs font-bold {runway_cls} font-mono'>{runway_txt}</div>
                     </div>
                 </div>
 
