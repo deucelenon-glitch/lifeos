@@ -148,6 +148,24 @@ class TermuxPlugin(LifeOSPlugin):
                 return cat
         return "auto"
 
+    def _is_duplicate(self, conn, amount: float, title: str, content: str) -> bool:
+        """Content-based dedupe: the same physical transaction can arrive from
+        two apps (bank + wallet + wise each push their own notification),
+        each with a different notif id — so id-based dedupe misses it.
+
+        Heuristic: same amount, same day, already logged within the last N
+        minutes. A legit double-transaction of exactly the same amount within
+        minutes is far rarer than notification duplication."""
+        minutes = 10
+        row = conn.execute(
+            """SELECT COUNT(*) FROM expenses
+               WHERE ABS(amount - ?) < 0.005
+                 AND expense_date = date('now')
+                 AND created_at >= datetime('now', ?)""",
+            (float(amount), f'-{minutes} minutes'),
+        ).fetchone()
+        return bool(row[0])
+
     def _deduct_and_log(self, conn, amount: float, category: str, note: str,
                         package: str, title: str, dedup_key: str) -> dict:
         """Insert expense + deduct from chosen capital account. Returns summary."""
@@ -235,6 +253,17 @@ class TermuxPlugin(LifeOSPlugin):
 
                 summary["captured"] += 1
                 category = self._categorize(f"{title} {content}")
+
+                if self._is_duplicate(conn, amount, title, content):
+                    # Same transaction already logged (came in from another app
+                    # within the window) — record the notification as skipped so
+                    # it never re-appears, but don't double-deduct.
+                    conn.execute(
+                        "INSERT INTO termux_scan (notif_id, package, title, content, amount, category, status) VALUES (?, ?, ?, ?, ?, ?, 'dup-skip')",
+                        (dedup_key, package, title[:200], content[:400], amount, category),
+                    )
+                    summary["skipped"] += 1
+                    continue
 
                 if cfg["auto_log"]:
                     note = f"{package} • {title}".strip(" •")[:120]
