@@ -114,11 +114,30 @@ class MoneyPlugin(LifeOSPlugin):
         return conn.execute("SELECT * FROM monthly_budget_items ORDER BY id ASC").fetchall()
 
     def _budget_total(self, conn) -> float:
+        """Monthly budget = Planner expense plans total (single source of truth).
+        Falls back to legacy monthly_budget_items only if no expense plans exist."""
+        try:
+            from app.plugins.planner import PlannerPlugin
+            total = PlannerPlugin().monthly_plan_cost()
+            if total and total > 0:
+                return _r2(total)
+        except Exception as e:
+            print(f"[money] planner cost unavailable: {e}")
         row = conn.execute("SELECT COALESCE(SUM(amount),0) FROM monthly_budget_items").fetchone()
         return _r2(row[0])
 
     def _rent_item(self, conn):
-        """Rent = item named Rent (any casing), else first item with a due day."""
+        """Rent = expense plan named Rent (any casing), else legacy item named Rent, else first with a due day."""
+        try:
+            rent_rows = conn.execute(
+                "SELECT target_name, cost_per, target_quantity FROM plans WHERE target_type = 'expense'"
+            ).fetchall()
+        except Exception:
+            rent_rows = []
+        for r in rent_rows:
+            if (r["target_name"] or "").strip().lower() == "rent":
+                amt = float(r["cost_per"] or 0) or float(r["target_quantity"] or 0)
+                return {"name": "Rent", "amount": amt, "due_day": None}
         items = self._budget_items(conn)
         for it in items:
             if (it["name"] or "").strip().lower() == "rent":
@@ -246,7 +265,7 @@ class MoneyPlugin(LifeOSPlugin):
             cfg = self._cfg(conn)
             burn = self._month_burn(conn)
             income = self._month_income(conn)
-            budget = self._budget_total(conn)          # Σ monthly_budget_items — auto-calculated
+            budget = self._budget_total(conn)          # Σ Planner expense plans — single source of truth
             rent_item = self._rent_item(conn)
             rent = float(rent_item["amount"] or 0) if rent_item else 0
             due_day = int(rent_item["due_day"] or 1) if rent_item else 1
@@ -570,10 +589,6 @@ class MoneyPlugin(LifeOSPlugin):
                         <div class='text-[10px] text-slate-500'>{("over by " + cur + f"{_r2(burn - budget):.2f}") if budget and burn > budget else "set in config"}</div>
                     </div>
                     <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
-                        <div class='text-[10px] uppercase font-mono text-slate-400'>Plan check</div>
-                        <div class='text-xs font-bold {plan_cls} font-mono'>{plan_txt}</div>
-                    </div>
-                    <div class='bg-dark-900 border border-dark-800 rounded-2xl p-3'>
                         <div class='text-[10px] uppercase font-mono text-slate-400'>Runway</div>
                         <div class='text-xs font-bold {runway_cls} font-mono'>{runway_txt}</div>
                     </div>
@@ -604,38 +619,6 @@ class MoneyPlugin(LifeOSPlugin):
                     </form>
                 </div>
 
-                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <h4 class='font-semibold text-white text-xs uppercase mb-3 mb-1'>📋 Monthly Budget <span class='text-slate-500'>(goal = sum)</span></h4>
-                    <div class='space-y-1.5'>
-                        {' '.join([f"<div class='flex justify-between items-center text-xs py-1.5'>"
-                                    f"<span class='text-slate-300'>{b['name']} <span class='text-slate-500'>{cur}{b['amount']:.2f}/mo</span>"
-                                    + (f" <span class='text-amber-400 border border-amber-500/30 rounded-md px-1.5 text-[10px]'>due day {b['due_day']}</span>" if b['due_day'] else "")
-                                    + f"</span>"
-                                    f"<span class='flex items-center space-x-1.5'>"
-                                    f"<button hx-post='/api/money/budget-item/{b['id']}/expense' hx-target='#money-area' hx-swap='outerHTML' class='bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-white px-2 py-1 rounded-lg text-[10px] font-medium border border-amber-500/30'>➕ Expense</button>"
-                                    f"<button hx-delete='/api/money/budget-item/{b['id']}' hx-target='#money-area' hx-swap='outerHTML' class='text-slate-600 hover:text-red-400 text-[10px] px-1'>✕</button>"
-                                    f"</span></div>" for b in budget_items] or ['<p class=\'text-xs text-slate-500 py-2\'>No budget items yet — add rent, food, subs below.</p>'])}
-                    </div>
-                    <form hx-post='/api/money/budget-item' hx-target='#money-area' hx-swap='outerHTML'
-                          class='flex gap-2 items-end mt-2.5'>
-                        <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Name</label>
-                            <input type='text' name='name' placeholder='Food' required
-                                   class='w-32 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm'>
-                        </div>
-                        <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>{cur}/mo</label>
-                            <input type='number' step='0.01' name='amount' placeholder='150' required
-                                   class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm font-mono'>
-                        </div>
-                        <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Due day</label>
-                            <input type='number' min='1' max='31' name='due_day' placeholder='optional'
-                                   class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm font-mono'>
-                        </div>
-                        <button type='submit' class='bg-dark-800 hover:bg-dark-700 text-emerald-400 font-medium px-3 py-1.5 rounded-lg text-xs'>➕ Add item</button>
-                    </form>
-                </div>
 
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <h4 class='font-semibold text-white text-xs uppercase mb-2'>Recent Income</h4>
@@ -663,7 +646,7 @@ class MoneyPlugin(LifeOSPlugin):
                         </div>
                         <button type='submit' class='w-full bg-dark-800 hover:bg-dark-700 text-emerald-400 font-medium py-2 rounded-xl text-sm'>Save</button>
                     </form>
-                    <p class='text-[10px] text-slate-500 mt-1.5 font-mono'>monthly budget goal = Σ of 📋 Monthly Budget items above · alerts: 🔴 over-budget · 🟠 80% warn · 🟢 praise when back under — pushed via Termux/Telegram by the worker</p>
+                    <p class='text-[10px] text-slate-500 mt-1.5 font-mono'>alerts: 🔴 over-budget · 🟠 80% warn · 🟢 praise when back under — pushed via Termux/Telegram by the worker</p>
                 </div>
             </div>
             </div>

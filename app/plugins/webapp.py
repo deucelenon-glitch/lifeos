@@ -41,14 +41,30 @@ class WebAppPlugin(LifeOSPlugin):
                 ).fetchone()[0] or 0
                 expense_count = conn.execute("SELECT COUNT(*) c FROM expenses").fetchone()["c"]
 
-                # Money config + unified monthly budget items (Σ = budget goal)
+                # Money config + budget = Planner expense plans (single source of truth)
                 mcfg = conn.execute("SELECT * FROM money_config ORDER BY id DESC LIMIT 1").fetchone()
-                budget = conn.execute("SELECT COALESCE(SUM(amount),0) FROM monthly_budget_items").fetchone()[0] or 0
-                rent_row = conn.execute("SELECT amount, due_day FROM monthly_budget_items WHERE lower(name) = 'rent' LIMIT 1").fetchone()
-                if not rent_row:  # fallback: first item with a due day
+                try:
+                    from app.plugins.planner import PlannerPlugin
+                    budget = PlannerPlugin().monthly_plan_cost()
+                except Exception:
+                    budget = 0.0
+                if not budget or budget <= 0:
+                    budget = conn.execute("SELECT COALESCE(SUM(amount),0) FROM monthly_budget_items").fetchone()[0] or 0
+                rent_row = None
+                try:
+                    rent_row = conn.execute(
+                        "SELECT target_name, cost_per, target_quantity FROM plans WHERE target_type = 'expense' AND lower(target_name) = 'rent' LIMIT 1"
+                    ).fetchone()
+                except Exception:
+                    rent_row = None
+                if not rent_row:  # fallback: first legacy item with a due day
                     rent_row = conn.execute("SELECT amount, due_day FROM monthly_budget_items WHERE due_day IS NOT NULL ORDER BY id ASC LIMIT 1").fetchone()
-                rent = float(rent_row["amount"] or 0) if rent_row else 0
-                rent_due_day = int(rent_row["due_day"] or 30) if rent_row else 30
+                if rent_row and "cost_per" in rent_row.keys():
+                    rent = float(rent_row["cost_per"] or 0) or float(rent_row["target_quantity"] or 0)
+                    rent_due_day = 30
+                else:
+                    rent = float(rent_row["amount"] or 0) if rent_row else 0
+                    rent_due_day = int(rent_row["due_day"] or 30) if rent_row else 30
 
                 # Plans
                 plan_count = conn.execute("SELECT COUNT(*) c FROM plans").fetchone()["c"]
@@ -90,7 +106,7 @@ class WebAppPlugin(LifeOSPlugin):
             cat_chips = "".join(
                 f"<div class='bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 flex justify-between items-center'>"
                 f"<span class='text-xs text-slate-300 font-mono uppercase'>{r['category']}</span>"
-                f"<span class='text-xs font-mono text-white'>€{r['total']:.2f} <span class='text-slate-500'>({int((r['total']/budget)*100)}%)</span></span></div>"
+                f"<span class='text-xs font-mono text-white'>€{r['total']:.2f} <span class='text-slate-500'>({int((r['total']/budget)*100) if budget else 0}%)</span></span></div>"
                 for r in cat_rows
             ) or "<div class='text-xs text-slate-500 py-2'>No expenses logged this month yet.</div>"
 

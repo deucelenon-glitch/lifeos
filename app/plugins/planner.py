@@ -173,7 +173,7 @@ class PlannerPlugin(LifeOSPlugin):
 
             tab_links = {
                 "habit": ("🔥", "Habits", "refreshTab('habits')"),
-                "expense": ("💶", "Cashflow", "refreshTab('money')"),
+                "expense": ("💰", "Expenses", "refreshTab('expenses')"),
                 "p2p": ("🛰️", "P2P", "refreshTab('p2p')"),
             }
 
