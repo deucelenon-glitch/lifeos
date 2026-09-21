@@ -127,6 +127,10 @@ class NotesPlugin(LifeOSPlugin):
                         "SELECT * FROM notes WHERE kind='reminder' ORDER BY remind_at, done, id DESC LIMIT 200"
                     ).fetchall()
                 open_count = conn.execute("SELECT COUNT(*) c FROM notes WHERE kind='reminder' AND done=0").fetchone()["c"]
+                p2p_cfg = conn.execute("SELECT reminder_time FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
+
+            p2p_reminder_time = p2p_cfg["reminder_time"] if p2p_cfg and p2p_cfg["reminder_time"] else ""
+            p2p_status_text = f"daily at {p2p_reminder_time}" if p2p_reminder_time else "not set"
 
             rows = "".join(_reminder_row(n) for n in notes) or "<p class='text-slate-500 py-4 text-center text-xs'>No reminders yet — set one below.</p>"
             return f"""
@@ -140,6 +144,21 @@ class NotesPlugin(LifeOSPlugin):
                         </div>
                         <span class='text-xs px-2.5 py-1 rounded-full bg-dark-800 text-slate-400 font-mono'>{open_count} open</span>
                     </div>
+                </div>
+                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
+                    <div class='flex items-center justify-between mb-3'>
+                        <div>
+                            <h4 class='font-semibold text-white text-xs uppercase'>🛰️ Daily P2P reminder</h4>
+                            <p class='text-[11px] text-slate-400'>Current: <span class='font-mono text-emerald-400'>{p2p_status_text}</span></p>
+                        </div>
+                    </div>
+                    <form hx-post='/api/notes/p2p-reminder' hx-target='#reminders-area' hx-swap='outerHTML'
+                          @submit="toast = 'P2P reminder saved ✓'"
+                          class='flex items-center gap-2'>
+                        <input type='time' name='reminder_time' value='{p2p_reminder_time}'
+                               class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs font-mono'>
+                        <button type='submit' class='bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3 py-1.5 rounded-xl text-xs'>Save P2P Reminder</button>
+                    </form>
                 </div>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <h4 class='font-semibold text-white text-xs uppercase mb-3'>➕ New reminder</h4>
@@ -233,6 +252,18 @@ class NotesPlugin(LifeOSPlugin):
             </div>
             </div>
             """
+
+        @router.post("/p2p-reminder", response_class=HTMLResponse)
+        def save_p2p_reminder(request: Request, reminder_time: str = Form("")):
+            reminder_time = reminder_time.strip()
+            with global_db.get_connection() as conn:
+                cfg = conn.execute("SELECT id FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
+                if cfg:
+                    conn.execute("UPDATE p2p_config SET reminder_time = ? WHERE id = ?", (reminder_time or None, cfg["id"]))
+                else:
+                    conn.execute("INSERT INTO p2p_config (interval_minutes, rate, reminder_time, enabled) VALUES (480, 1.15, ?, 1)", (reminder_time or None,))
+                conn.commit()
+            return reminders_view(request)
 
         @router.post("/reminder", response_class=HTMLResponse)
         def add_reminder(request: Request, title: str = Form(...), remind_at: str = Form(...), body: str = Form("")):

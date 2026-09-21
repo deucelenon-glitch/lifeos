@@ -91,6 +91,8 @@ class P2PPlugin(LifeOSPlugin):
             conn.execute("ALTER TABLE p2p_config ADD COLUMN order_size REAL")
         if "monthly_goal" not in cols:
             conn.execute("ALTER TABLE p2p_config ADD COLUMN monthly_goal REAL")
+        if "last_reminder_date" not in cols:
+            conn.execute("ALTER TABLE p2p_config ADD COLUMN last_reminder_date TEXT")
         conn.commit()
 
         row = conn.execute("SELECT COUNT(*) FROM p2p_config").fetchone()
@@ -239,20 +241,15 @@ class P2PPlugin(LifeOSPlugin):
                 </div>
 
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>⏰ Order Reminder</h4>
+                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>⏰ Order Config</h4>
                     <form hx-post='/api/p2p/config' hx-target='#p2p-area' hx-swap='outerHTML'
-                          @submit="toast = 'Reminder saved ✓ — notified daily at the set time'"
-                          class='grid grid-cols-2 md:grid-cols-5 gap-2 items-end'>
+                          @submit="toast = 'Config saved ✓'"
+                          class='grid grid-cols-1 md:grid-cols-4 gap-2 items-end'>
                         <div>
                             <label class='text-[10px] uppercase font-mono text-slate-400'>Order size</label>
                             <select name='order_size' class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                                 {size_opts}
                             </select>
-                        </div>
-                        <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Remind at</label>
-                            <input type='time' name='reminder_time' value='{reminder_time}'
-                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                         </div>
                         <div>
                             <label class='text-[10px] uppercase font-mono text-slate-400'>Monthly goal</label>
@@ -470,8 +467,42 @@ class P2PPlugin(LifeOSPlugin):
 
         return {"p2p": cmd_p2p, "order": cmd_order}
 
-    def periodic_check(self):
-        """Nothing time-critical for the ledger; kept for worker compat."""
+    def periodic_check(self) -> bool:
+        """Checks if daily P2P reminder should fire."""
+        from app.database import db as global_db
+        try:
+            with global_db.get_connection() as conn:
+                cfg = self._cfg(conn)
+                if not cfg or not cfg["enabled"] or not cfg["reminder_time"]:
+                    return False
+                now = datetime.now()
+                today_str = now.strftime("%Y-%m-%d")
+                if cfg["last_reminder_date"] == today_str:
+                    return False
+                current_time_str = now.strftime("%H:%M")
+                if current_time_str >= cfg["reminder_time"]:
+                    # Send notification
+                    token, chat = None, None
+                    try:
+                        trow = conn.execute(
+                            "SELECT bot_token, chat_id FROM telegram_config ORDER BY id DESC LIMIT 1"
+                        ).fetchone()
+                        if trow:
+                            token, chat = trow["bot_token"], trow["chat_id"]
+                    except Exception:
+                        pass
+                    from app.utils.notifications import notify
+                    notify(
+                        "🛰️ P2P order time",
+                        "Daily order reminder — place your P2P order (price feed will remind at thresholds).",
+                        telegram_token=token,
+                        telegram_chat_id=chat
+                    )
+                    conn.execute("UPDATE p2p_config SET last_reminder_date = ? WHERE id = ?", (today_str, cfg["id"]))
+                    conn.commit()
+                    return True
+        except Exception as e:
+            print(f"[p2p] periodic_check error: {e}")
         return False
 
     def get_dashboard_widgets(self) -> list:
