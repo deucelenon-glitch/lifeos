@@ -52,6 +52,7 @@
             planner:   { sel: '#planner-list',   url: '/api/planner/view' },
             p2p:       { sel: '#p2p-area',       url: '/api/p2p/view' },
             reminders: { sel: '#reminders-area', url: '/api/notes/reminders' },
+            notes:     { sel: '#notepad-area',   url: '/api/notes/notepad' },
             capital:   { sel: '#capital-area',   url: '/api/capital/view' },
             termux:    { sel: '#termux-area',    url: '/api/termux/view' },
             home:      { sel: '#dash-cards',     url: '/api/dashboard' }
@@ -119,6 +120,9 @@
             <button @click="refreshTab('reminders')"
                     :class="activeTab === 'reminders' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🔔 Reminders</button>
+            <button @click="refreshTab('notes')"
+                    :class="activeTab === 'notes' ? 'tab-active' : 'tab-inactive'"
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">📝 Notes</button>
             <button @click="refreshTab('termux')"
                     :class="activeTab === 'termux' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">📡 Auto-Expense</button>
@@ -316,6 +320,17 @@
             </div>
             <div id="reminders-area" hx-get="/api/notes/reminders" hx-trigger="load">
                 <div class="text-slate-500 py-8 text-center text-sm">Loading reminders…</div>
+            </div>
+        </div>
+
+        <!-- ============ NOTES TAB ============ -->
+        <div x-show="activeTab === 'notes'" x-cloak class="space-y-5">
+            <div class="mb-2">
+                <h2 class="font-bold text-lg text-white">📝 Notes</h2>
+                <p class="text-xs text-slate-400 mt-0.5">Quick scratchpad — jot ideas, lists and links.</p>
+            </div>
+            <div id="notepad-area" hx-get="/api/notes/notepad" hx-trigger="load">
+                <div class="text-slate-500 py-8 text-center text-sm">Loading notes…</div>
             </div>
         </div>
 

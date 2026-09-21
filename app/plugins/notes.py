@@ -379,7 +379,11 @@ class NotesPlugin(LifeOSPlugin):
         @router.delete("/{note_id}", response_class=HTMLResponse)
         def delete_note(request: Request, note_id: int):
             with global_db.get_connection() as conn:
+                row = conn.execute("SELECT kind FROM notes WHERE id = ?", (note_id,)).fetchone()
+                kind = row["kind"] if row else "note"
                 conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-            return reminders_view(request)
+            if kind == "reminder":
+                return reminders_view(request)
+            return notepad_view(request)
 
         return router
