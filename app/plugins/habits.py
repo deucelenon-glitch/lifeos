@@ -116,23 +116,7 @@ class HabitsPlugin(LifeOSPlugin):
                         </div>
                     </div>
                     <div class='flex items-center space-x-2'>
-                        <details class='relative'>
-                            <summary class='text-slate-500 hover:text-emerald-400 text-xs cursor-pointer px-2 py-1.5 rounded-lg border border-dark-700 transition'>⚙️ plan</summary>
-                            <form hx-post='/api/habits/{h['id']}/plan' hx-target='#habits-list'
-                                  class='absolute right-0 top-full mt-1 z-40 bg-dark-900 border border-dark-700 rounded-xl p-3 space-y-1.5 w-56 shadow-lg'>
-                                <div class='flex items-center gap-2'>
-                                    <label class='text-[10px] uppercase font-mono text-slate-400 w-16'>×/week</label>
-                                    <input type='number' name='weekly_target' value='{h['weekly_target'] or 0}' min='0' max='28'
-                                           class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm font-mono'>
-                                </div>
-                                <div class='flex items-center gap-2'>
-                                    <label class='text-[10px] uppercase font-mono text-slate-400 w-16'>€ each</label>
-                                    <input type='number' step='0.01' name='cost_per' value='{h['cost_per'] or 0:.2f}' min='0'
-                                           class='w-20 bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-sm font-mono'>
-                                </div>
-                                <button type='submit' class='w-full bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium py-1.5 rounded-lg'>Save plan</button>
-                            </form>
-                        </details>
+                        
                         {'<button hx-post=\'/api/habits/' + str(h['id']) + '/expense-from\' hx-target=\'#habits-list\' class=\'bg-amber-500/15 hover:bg-amber-500 text-amber-400 hover:text-white px-2.5 py-1.5 rounded-lg text-xs font-medium transition border border-amber-500/30\' title=\'Log one ' + str(h['cost_per']) + ' as an expense\'>➕ Expense</button>' if h['cost_per'] else ''}
                         <button hx-post='/api/habits/{h['id']}/check' hx-target='#habits-list' class='bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white px-3 py-1.5 rounded-lg text-xs font-medium transition border border-emerald-500/30'>Check Today</button>
                         <button hx-delete='/api/habits/{h['id']}' hx-target='#habits-list' class='text-slate-500 hover:text-red-400 p-1.5 transition'>✕</button>
