@@ -93,9 +93,9 @@ class HabitsPlugin(LifeOSPlugin):
                 """).fetchall()
             
             if not habits:
-                return "<div class='text-slate-500 py-8 text-center'>No habits tracked yet. Add one above!</div>"
+                return "<div id='habits-list'><div class='text-slate-500 py-8 text-center'>No habits tracked yet. Add one above!</div></div>"
 
-            html = "<div class='space-y-3'>"
+            html = "<div id='habits-list'><div class='space-y-3'>"
             for h in habits:
                 streak = h["streak"] or 0
                 target = h["target_streak"]
@@ -123,7 +123,7 @@ class HabitsPlugin(LifeOSPlugin):
                     </div>
                 </div>
                 """
-            html += "</div>"
+            html += "</div></div>"
             return html
 
         @router.get("/widget", response_class=HTMLResponse)

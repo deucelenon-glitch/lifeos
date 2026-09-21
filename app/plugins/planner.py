@@ -249,9 +249,9 @@ class PlannerPlugin(LifeOSPlugin):
                 """)
 
             if cards:
-                html = summary + header + "<div class='space-y-3 mt-3'>" + "".join(cards) + "</div>"
+                html = summary + header + "<div id='planner-list'><div class='space-y-3 mt-3'>" + "".join(cards) + "</div></div>"
             else:
-                html = summary + header + empty_html
+                html = summary + header + "<div id='planner-list'>" + empty_html + "</div>"
             return html
 
         @router.post("/", response_class=HTMLResponse)

@@ -170,9 +170,9 @@ class ExpensesPlugin(LifeOSPlugin):
             """
 
             if not expenses:
-                return summary + "<div class='text-slate-500 py-8 text-center'>No expenses logged this month.</div>"
+                return summary + "<div id='expenses-list'><div class='text-slate-500 py-8 text-center'>No expenses logged this month.</div></div>"
 
-            html = summary + "<div class='space-y-3'>"
+            html = summary + "<div id='expenses-list'><div class='space-y-3'>"
             for e in expenses:
                 html += f"""
                 <div class='bg-dark-900 border border-dark-700 rounded-xl p-4 flex items-center justify-between'>
@@ -187,7 +187,7 @@ class ExpensesPlugin(LifeOSPlugin):
                     <button hx-delete='/api/expenses/{e['id']}' hx-target='#expenses-list' class='text-slate-500 hover:text-red-400 p-1.5 transition'>✕</button>
                 </div>
                 """
-            html += "</div>"
+            html += "</div></div>"
             return html
 
         @router.get("/widget", response_class=HTMLResponse)

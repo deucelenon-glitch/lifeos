@@ -46,27 +46,20 @@
         },
         pull(tab) {
           const map = {
-            habits: '#habits-list',
-            expenses: '#expenses-list',
-            money: '#money-area',
-            planner: '#planner-list',
-            p2p: '#p2p-area',
-            reminders: '#reminders-area',
-            capital: '#capital-area',
-            termux: '#termux-area',
-            home: '#dash-cards'
+            habits:    { sel: '#habits-list',    url: '/api/habits/list' },
+            expenses:  { sel: '#expenses-list',  url: '/api/expenses/list' },
+            money:     { sel: '#money-area',     url: '/api/money/view' },
+            planner:   { sel: '#planner-list',   url: '/api/planner/view' },
+            p2p:       { sel: '#p2p-area',       url: '/api/p2p/view' },
+            reminders: { sel: '#reminders-area', url: '/api/notes/reminders' },
+            capital:   { sel: '#capital-area',   url: '/api/capital/view' },
+            termux:    { sel: '#termux-area',    url: '/api/termux/view' },
+            home:      { sel: '#dash-cards',     url: '/api/dashboard' }
           };
-          const sel = map[tab];
-          if (sel) {
-            const el = document.querySelector(sel);
-            if (el && window.htmx) {
-              htmx.trigger(el, 'load');
-            } else if (el) {
-              const url = el.getAttribute('hx-get');
-              if (url && window.htmx) {
-                htmx.ajax('GET', url, { target: el, swap: 'outerHTML' });
-              }
-            }
+          const m = map[tab];
+          if (m && window.htmx) {
+            const el = document.querySelector(m.sel);
+            if (el) htmx.ajax('GET', m.url, { target: el, swap: 'outerHTML' });
           }
         },
         initAutoRefresh() {
