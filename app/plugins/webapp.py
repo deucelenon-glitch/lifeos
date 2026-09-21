@@ -103,6 +103,51 @@ class WebAppPlugin(LifeOSPlugin):
             net_pnl = income - burn
             budget_pct = int((burn / budget) * 100) if budget > 0 else 0
 
+            # --- Daily snapshot: pending reminders + today's habit check-ins ---
+            today_iso = datetime.now().date().isoformat()
+            next_reminder = None
+            open_reminders = 0
+            try:
+                from app.database import db as _db
+                with _db.get_connection() as conn2:
+                    r = conn2.execute(
+                        "SELECT title, body, remind_at FROM notes WHERE kind='reminder' AND done=0 AND remind_at IS NOT NULL ORDER BY remind_at LIMIT 1"
+                    ).fetchone()
+                    if r:
+                        next_reminder = r
+                    open_reminders = conn2.execute(
+                        "SELECT COUNT(*) c FROM notes WHERE kind='reminder' AND done=0"
+                    ).fetchone()["c"]
+            except Exception:
+                pass
+            try:
+                from app.database import db as _db2
+                with _db2.get_connection() as conn2:
+                    today_habits = conn2.execute(
+                        "SELECT h.name, COUNT(hl.id) n FROM habits h JOIN habit_logs hl ON hl.habit_id = h.id "
+                        "WHERE hl.completed_date = ? GROUP BY h.id ORDER BY h.name",
+                        (today_iso,),
+                    ).fetchall()
+                    habits_total = conn2.execute("SELECT COUNT(*) c FROM habits").fetchone()["c"]
+            except Exception:
+                today_habits = []
+                habits_total = 0
+            habits_done = len(today_habits)
+            habits_left = max(0, habits_total - habits_done)
+            today_habit_label = ", ".join(h["name"] for h in today_habits) or "—"
+
+            # Reminder chip
+            if next_reminder:
+                remind_label = f"{next_reminder['title']} · {next_reminder['remind_at'][:16]}"
+                remind_sub = (next_reminder["body"] or "")[:60] or "tap Reminders tab"
+            else:
+                remind_label = "No upcoming reminders"
+                remind_sub = "set one in the Reminders tab"
+
+            # Habit chip
+            habit_label = f"{habits_done}/{habits_total} habits done today"
+            habit_sub = today_habit_label if habits_done else "none checked off yet"
+
             cat_chips = "".join(
                 f"<div class='bg-dark-900 border border-dark-800 rounded-xl px-3 py-2 flex justify-between items-center'>"
                 f"<span class='text-xs text-slate-300 font-mono uppercase'>{r['category']}</span>"
@@ -131,6 +176,28 @@ class WebAppPlugin(LifeOSPlugin):
                         <span>🤖 Bot: {'Linked' if tg else 'Unlinked'}</span>
                         <span>•</span>
                         <span>🗓️ Rent in {days_to_rent}d (€{rent:.0f})</span>
+                    </div>
+                </div>
+
+                <!-- Daily Snapshot — next reminder + today's habits -->
+                <div class='bg-dark-900 border border-dark-700 rounded-2xl p-3 grid grid-cols-1 md:grid-cols-2 gap-2.5'>
+                    <div class='flex items-center gap-3'>
+                        <div class='w-9 h-9 rounded-xl bg-dark-800 flex items-center justify-center text-base'>🔔</div>
+                        <div class='min-w-0 flex-1'>
+                            <div class='text-[11px] uppercase font-mono text-slate-400'>Next Reminder</div>
+                            <div class='text-sm text-slate-200 truncate'>{remind_label}</div>
+                            <div class='text-[11px] text-slate-500 truncate'>{remind_sub}</div>
+                        </div>
+                        <span class='text-[10px] px-2 py-0.5 rounded-full bg-dark-800 text-slate-400 font-mono'>{open_reminders} open</span>
+                    </div>
+                    <div class='flex items-center gap-3'>
+                        <div class='w-9 h-9 rounded-xl bg-dark-800 flex items-center justify-center text-base'>🔥</div>
+                        <div class='min-w-0 flex-1'>
+                            <div class='text-[11px] uppercase font-mono text-slate-400'>Today's Habits</div>
+                            <div class='text-sm text-slate-200 truncate'>{habit_label}</div>
+                            <div class='text-[11px] text-slate-500 truncate'>{habit_sub}</div>
+                        </div>
+                        <span class='text-[10px] px-2 py-0.5 rounded-full {"bg-emerald-500/20 text-emerald-400" if habits_done >= habits_left and habits_total > 0 else "bg-dark-800 text-slate-400"} font-mono'>{habits_done}/{habits_total}</span>
                     </div>
                 </div>
 
