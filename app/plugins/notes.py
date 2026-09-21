@@ -1,7 +1,9 @@
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from app.plugins.base import LifeOSPlugin
+import calendar
 import datetime
+import re
 import sqlite3
 
 
@@ -22,6 +24,19 @@ class NotesPlugin(LifeOSPlugin):
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(notes)").fetchall()]
+        if "repeat_rule" not in cols:
+            conn.execute("ALTER TABLE notes ADD COLUMN repeat_rule TEXT DEFAULT ''")
+        if "repeat_until" not in cols:
+            conn.execute("ALTER TABLE notes ADD COLUMN repeat_until TEXT DEFAULT ''")
+        # Repair malformed remind_at values (e.g. '2026-09-21 :19:40' or '2026-09-21:19:40')
+        for r in conn.execute("SELECT id, remind_at FROM notes WHERE kind='reminder' AND remind_at IS NOT NULL").fetchall():
+            raw = (r["remind_at"] or "").strip().replace("T", " ")
+            fixed = re.sub(r"(\d{4}-\d{2}-\d{2})\s*:\s*(\d{2}:\d{2})", r"\1 \2", raw)
+            fixed = re.sub(r"\s*:\s*", ":", fixed)
+            fixed = re.sub(r"\s+", " ", fixed)
+            if fixed != r["remind_at"]:
+                conn.execute("UPDATE notes SET remind_at = ? WHERE id = ?", (fixed, r["id"]))
         conn.commit()
 
     def _now(self) -> str:
@@ -32,6 +47,34 @@ class NotesPlugin(LifeOSPlugin):
             "SELECT * FROM notes WHERE kind='reminder' AND done=0 AND remind_at IS NOT NULL AND remind_at <= ?",
             (now,),
         ).fetchall()
+
+    def _next_occurrence(self, remind_at: str, rule: str) -> str:
+        try:
+            dt = datetime.datetime.strptime(remind_at, "%Y-%m-%d %H:%M")
+        except (ValueError, TypeError):
+            return remind_at
+        if rule == "daily":
+            dt += datetime.timedelta(days=1)
+        elif rule == "weekly":
+            dt += datetime.timedelta(days=7)
+        elif rule == "monthly":
+            year = dt.year + (dt.month // 12)
+            month = dt.month % 12 + 1
+            day = min(dt.day, calendar.monthrange(year, month)[1])
+            dt = dt.replace(year=year, month=month, day=day)
+        elif rule == "yearly":
+            year = dt.year + 1
+            day = min(dt.day, calendar.monthrange(year, dt.month)[1])
+            dt = dt.replace(year=year, day=day)
+        elif rule.startswith("custom:"):
+            try:
+                n = int(rule.split(":", 1)[1])
+            except (ValueError, IndexError):
+                n = 1
+            dt += datetime.timedelta(days=max(1, n))
+        else:
+            return remind_at
+        return dt.strftime("%Y-%m-%d %H:%M")
 
     def _send(self, title: str, body: str):
         from app.database import db as global_db
@@ -57,7 +100,19 @@ class NotesPlugin(LifeOSPlugin):
                     return False
                 for r in due:
                     self._send(f"⏰ {r['title'] or 'Reminder'}", r["body"] or "It's time!")
-                    conn.execute("UPDATE notes SET done = 1 WHERE id = ?", (r["id"],))
+                    rule = r["repeat_rule"] or ""
+                    if rule:
+                        nxt = self._next_occurrence(r["remind_at"], rule)
+                        repeat_until = (r["repeat_until"] or "").strip()
+                        if repeat_until and nxt[:10] > repeat_until:
+                            conn.execute("UPDATE notes SET done = 1 WHERE id = ?", (r["id"],))
+                        else:
+                            conn.execute(
+                                "UPDATE notes SET remind_at = ?, done = 0 WHERE id = ?",
+                                (nxt, r["id"]),
+                            )
+                    else:
+                        conn.execute("UPDATE notes SET done = 1 WHERE id = ?", (r["id"],))
                 conn.commit()
                 return True
         except Exception as e:
@@ -82,6 +137,20 @@ class NotesPlugin(LifeOSPlugin):
 
         def _reminder_row(n):
             status = "✅ done" if n["done"] else ("🔴 overdue" if n["remind_at"] and n["remind_at"] < self._now() else "🟢 upcoming")
+            repeat = (n["repeat_rule"] or "").strip()
+            if repeat.startswith("custom:"):
+                try:
+                    n_days = int(repeat.split(":", 1)[1])
+                    repeat_label = f"↻ every {n_days} day{'s' if n_days != 1 else ''}"
+                except (ValueError, IndexError):
+                    repeat_label = "↻ custom"
+            elif repeat:
+                repeat_label = f"↻ {repeat}"
+            else:
+                repeat_label = ""
+            until = (n["repeat_until"] or "").strip()
+            until_label = f" · until {until}" if until else ""
+            repeat_html = f"<span class='text-[10px] px-1.5 rounded bg-dark-800 text-emerald-500/80'>{repeat_label}</span>" if repeat_label else ""
             done_btn = "" if n["done"] else (
                 f"<button hx-post='/api/notes/{n['id']}/done' hx-target='#reminders-area' hx-swap='outerHTML' "
                 f"class='text-emerald-500 hover:text-emerald-300 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30'>✓ Done</button>"
@@ -92,6 +161,7 @@ class NotesPlugin(LifeOSPlugin):
                     <span class='text-slate-200 font-semibold'>⏰ {n['title'] or 'Reminder'}</span>
                     <span class='text-slate-500 font-mono ml-1'>{n['remind_at']}</span>
                     <span class='text-[10px] px-1.5 rounded bg-dark-700 text-slate-400'>{status}</span>
+                    {repeat_html}{until_label and f"<span class='text-slate-500 font-mono ml-1'>{until_label}</span>" or ''}
                     {(f"<p class='text-slate-400 mt-0.5'>{n['body'][:160]}</p>") if n["body"] else ""}
                 </div>
                 <div class='flex items-center gap-1'>
@@ -127,10 +197,6 @@ class NotesPlugin(LifeOSPlugin):
                         "SELECT * FROM notes WHERE kind='reminder' ORDER BY remind_at, done, id DESC LIMIT 200"
                     ).fetchall()
                 open_count = conn.execute("SELECT COUNT(*) c FROM notes WHERE kind='reminder' AND done=0").fetchone()["c"]
-                p2p_cfg = conn.execute("SELECT reminder_time FROM p2p_config ORDER BY id DESC LIMIT 1").fetchone()
-
-            p2p_reminder_time = p2p_cfg["reminder_time"] if p2p_cfg and p2p_cfg["reminder_time"] else ""
-            p2p_status_text = f"daily at {p2p_reminder_time}" if p2p_reminder_time else "not set"
 
             rows = "".join(_reminder_row(n) for n in notes) or "<p class='text-slate-500 py-4 text-center text-xs'>No reminders yet — set one below.</p>"
             return f"""
@@ -146,21 +212,6 @@ class NotesPlugin(LifeOSPlugin):
                     </div>
                 </div>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <div class='flex items-center justify-between mb-3'>
-                        <div>
-                            <h4 class='font-semibold text-white text-xs uppercase'>🛰️ Daily P2P reminder</h4>
-                            <p class='text-[11px] text-slate-400'>Current: <span class='font-mono text-emerald-400'>{p2p_status_text}</span></p>
-                        </div>
-                    </div>
-                    <form hx-post='/api/notes/p2p-reminder' hx-target='#reminders-area' hx-swap='outerHTML'
-                          @submit="toast = 'P2P reminder saved ✓'"
-                          class='flex items-center gap-2'>
-                        <input type='time' name='reminder_time' value='{p2p_reminder_time}'
-                               class='bg-dark-950 border border-dark-800 rounded-lg px-2 py-1.5 text-white text-xs font-mono'>
-                        <button type='submit' class='bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3 py-1.5 rounded-xl text-xs'>Save P2P Reminder</button>
-                    </form>
-                </div>
-                <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
                     <h4 class='font-semibold text-white text-xs uppercase mb-3'>➕ New reminder</h4>
                     <form hx-post='/api/notes/reminder' hx-target='#reminders-area' hx-swap='outerHTML'
                           @submit="toast = 'Reminder set ✓'"
@@ -171,8 +222,8 @@ class NotesPlugin(LifeOSPlugin):
                                    class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
                         </div>
                         <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>When (YYYY-MM-DD HH:MM)</label>
-                            <input type='text' name='remind_at' placeholder='2026-09-25 18:00' required
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>When</label>
+                            <input type='datetime-local' name='remind_at' required
                                    class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                         </div>
                         <div>
@@ -181,6 +232,26 @@ class NotesPlugin(LifeOSPlugin):
                                    class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
                         </div>
                         <button type='submit' class='w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-xl text-sm'>⏰ Set</button>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Repeat</label>
+                            <select name='repeat_rule' class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm'>
+                                <option value='' selected>🔁 No repeat</option>
+                                <option value='daily'>↻ Daily</option>
+                                <option value='weekly'>↻ Weekly</option>
+                                <option value='monthly'>↻ Monthly</option>
+                                <option value='yearly'>↻ Yearly</option>
+                                <option value='custom:2'>↻ Every 2 days</option>
+                                <option value='custom:3'>↻ Every 3 days</option>
+                                <option value='custom:7'>↻ Every 7 days</option>
+                                <option value='custom:14'>↻ Every 14 days</option>
+                                <option value='custom:30'>↻ Every 30 days</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Repeat until (YYYY-MM-DD)</label>
+                            <input type='date' name='repeat_until' value=''
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-xs font-mono'>
+                        </div>
                     </form>
                 </div>
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
@@ -266,11 +337,27 @@ class NotesPlugin(LifeOSPlugin):
             return reminders_view(request)
 
         @router.post("/reminder", response_class=HTMLResponse)
-        def add_reminder(request: Request, title: str = Form(...), remind_at: str = Form(...), body: str = Form("")):
+        def add_reminder(
+            request: Request,
+            title: str = Form(...),
+            remind_at: str = Form(...),
+            body: str = Form(""),
+            repeat_rule: str = Form(""),
+            repeat_until: str = Form(""),
+        ):
+            # Normalize: accept 'YYYY-MM-DDTHH:MM' (datetime-local) or 'YYYY-MM-DD HH:MM'
+            dt_raw = remind_at.strip().replace("T", " ")
+            dt_raw = re.sub(r"\s*:\s*", ":", dt_raw)
+            dt_raw = re.sub(r"\s+", " ", dt_raw)
+            try:
+                parsed = datetime.datetime.strptime(dt_raw[:16], "%Y-%m-%d %H:%M")
+                dt_norm = parsed.strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                return reminders_view(request)  # invalid — re-render
             with global_db.get_connection() as conn:
                 conn.execute(
-                    "INSERT INTO notes (kind, title, body, remind_at, done) VALUES ('reminder', ?, ?, ?, 0)",
-                    (title.strip(), body.strip(), remind_at.strip()),
+                    "INSERT INTO notes (kind, title, body, remind_at, done, repeat_rule, repeat_until) VALUES ('reminder', ?, ?, ?, 0, ?, ?)",
+                    (title.strip(), body.strip(), dt_norm, repeat_rule.strip(), repeat_until.strip()),
                 )
             return reminders_view(request)
 

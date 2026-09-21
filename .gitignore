@@ -5,3 +5,6 @@ data/*.db
 data/*.db-journal
 backups/*.db
 *.log
+lifeos.db
+lifeos.db-journal
+*.db

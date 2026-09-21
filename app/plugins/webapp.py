@@ -136,10 +136,30 @@ class WebAppPlugin(LifeOSPlugin):
             habits_left = max(0, habits_total - habits_done)
             today_habit_label = ", ".join(h["name"] for h in today_habits) or "—"
 
-            # Reminder chip
+            # Reminder chip — short, driven by whichever pops first
+            remind_overdue = False
             if next_reminder:
-                remind_label = f"{next_reminder['title']} · {next_reminder['remind_at'][:16]}"
-                remind_sub = (next_reminder["body"] or "")[:60] or "tap Reminders tab"
+                from datetime import datetime as _dt
+                try:
+                    due_dt = _dt.strptime(next_reminder["remind_at"][:16], "%Y-%m-%d %H:%M")
+                    mins = int((due_dt - _dt.now()).total_seconds() // 60)
+                    if mins < 0:
+                        remind_overdue = True
+                        a = -mins
+                        remind_rel = (f"{a}m overdue" if a < 60 else (f"{a//60}h overdue" if a < 1440 else f"{a//1440}d overdue"))
+                    elif mins <= 1:
+                        remind_rel = "now"
+                    elif mins < 60:
+                        remind_rel = f"in {mins}m"
+                    elif mins < 1440:
+                        remind_rel = f"in {mins//60}h"
+                    else:
+                        remind_rel = f"in {mins//1440}d"
+                except Exception:
+                    remind_rel = next_reminder["remind_at"][:16]
+                remind_label = (next_reminder["title"] or "Reminder")[:24]
+                remind_body = (next_reminder["body"] or "").strip()[:40]
+                remind_sub = f"{remind_rel} · {remind_body}" if remind_body else remind_rel
             else:
                 remind_label = "No upcoming reminders"
                 remind_sub = "set one in the Reminders tab"
@@ -180,15 +200,15 @@ class WebAppPlugin(LifeOSPlugin):
                 </div>
 
                 <!-- Daily Snapshot — next reminder + today's habits -->
-                <div class='bg-dark-900 border border-dark-700 rounded-2xl p-3 grid grid-cols-1 md:grid-cols-2 gap-2.5'>
+                <div class='bg-dark-900 border {'border-rose-500/40' if remind_overdue else 'border-dark-700'} rounded-2xl p-3 grid grid-cols-1 md:grid-cols-2 gap-2.5'>
                     <div class='flex items-center gap-3'>
                         <div class='w-9 h-9 rounded-xl bg-dark-800 flex items-center justify-center text-base'>🔔</div>
                         <div class='min-w-0 flex-1'>
-                            <div class='text-[11px] uppercase font-mono text-slate-400'>Next Reminder</div>
-                            <div class='text-sm text-slate-200 truncate'>{remind_label}</div>
-                            <div class='text-[11px] text-slate-500 truncate'>{remind_sub}</div>
+                            <div class='text-[11px] uppercase font-mono {'text-rose-400' if remind_overdue else 'text-slate-400'}'>Next Reminder</div>
+                            <div class='text-sm {'text-rose-300' if remind_overdue else 'text-slate-200'} truncate'>{remind_label}</div>
+                            <div class='text-[11px] {'text-rose-300/80' if remind_overdue else 'text-slate-500'} truncate'>{remind_sub}</div>
                         </div>
-                        <span class='text-[10px] px-2 py-0.5 rounded-full bg-dark-800 text-slate-400 font-mono'>{open_reminders} open</span>
+                        <a href='#' @click.prevent="refreshTab('reminders')" class='text-[10px] px-2 py-0.5 rounded-full {'bg-rose-500/20 text-rose-400 animate-pulse' if remind_overdue else 'bg-dark-800 text-slate-400 hover:bg-dark-700'} font-mono'>{open_reminders} open →</a>
                     </div>
                     <div class='flex items-center gap-3'>
                         <div class='w-9 h-9 rounded-xl bg-dark-800 flex items-center justify-center text-base'>🔥</div>

@@ -71,8 +71,8 @@ def load_plugins(app: FastAPI):
     app.state.plugins = {}
     plugins_dir = settings.PLUGINS_DIR
 
-    # Plugins stripped from the UI per Dex (2026-09-21): notepad + reminders.
-    DISABLED_PLUGINS = {"notes"}
+    # Plugins stripped from the UI per Dex (2026-09-21) — re-enabled 2026-09-21: notes (Reminders tab).
+    DISABLED_PLUGINS = set()
 
     # Ensure plugins directory exists
     plugins_dir.mkdir(parents=True, exist_ok=True)
