@@ -173,14 +173,38 @@ class NotesPlugin(LifeOSPlugin):
 
         def _note_row(n):
             return f"""
-            <div class='flex items-start justify-between gap-2 py-2 border-b border-dark-800/60 text-xs'>
+            <div id='note-{n['id']}' class='flex items-start justify-between gap-2 py-2 border-b border-dark-800/60 text-xs'>
                 <div class='min-w-0'>
                     <span class='text-slate-200'>{(n['title'] and ('📝 ' + n['title'])) or '📝 Untitled'}</span>
                     <p class='text-slate-400 whitespace-pre-wrap mt-0.5'>{n['body'] or ''}</p>
                     <span class='text-[10px] text-slate-600 font-mono'>{n['created_at'][:16]}</span>
                 </div>
-                <button hx-delete='/api/notes/{n['id']}' hx-target='#notepad-area' hx-swap='outerHTML'
-                        class='text-slate-600 hover:text-red-400 shrink-0 text-[10px]'>✕</button>
+                <div class='flex items-center gap-2 shrink-0'>
+                    <button hx-get='/api/notes/{n['id']}/edit' hx-target='#note-{n['id']}' hx-swap='outerHTML'
+                            class='text-slate-500 hover:text-emerald-400 text-[10px] px-1.5 py-0.5 rounded bg-dark-800/60 border border-dark-700'>✏️</button>
+                    <button hx-delete='/api/notes/{n['id']}' hx-target='#notepad-area' hx-swap='outerHTML'
+                            class='text-slate-600 hover:text-red-400 text-[10px]'>✕</button>
+                </div>
+            </div>"""
+
+        def _edit_note_form(n):
+            return f"""
+            <div id='note-{n['id']}' class='py-2 border-b border-dark-800/60'>
+                <form hx-post='/api/notes/{n['id']}/edit' hx-target='#notepad-area' hx-swap='outerHTML'
+                      @submit="toast = 'Note updated ✓'"
+                      class='space-y-2 bg-dark-950 border border-emerald-500/30 rounded-xl p-3'>
+                    <input type='text' name='title' value='{(n['title'] or '').replace(chr(39), '&#39;')}'
+                           placeholder='Title (optional)'
+                           class='w-full bg-dark-800 border border-dark-700 rounded-lg px-2 py-1.5 text-white text-sm'>
+                    <textarea name='body' rows='3' required
+                              placeholder='Note body…'
+                              class='w-full bg-dark-800 border border-dark-700 rounded-lg px-2 py-1.5 text-white text-sm'>{n['body'] or ''}</textarea>
+                    <div class='flex gap-2'>
+                        <button type='submit' class='bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3 py-1.5 rounded-lg text-xs'>💾 Save</button>
+                        <button type='button' hx-get='/api/notes/notepad' hx-target='#notepad-area' hx-swap='outerHTML'
+                                class='bg-dark-800 hover:bg-dark-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs'>Cancel</button>
+                    </div>
+                </form>
             </div>"""
 
         @router.get("/reminders", response_class=HTMLResponse)
@@ -367,6 +391,23 @@ class NotesPlugin(LifeOSPlugin):
                 conn.execute(
                     "INSERT INTO notes (kind, title, body) VALUES ('note', ?, ?)",
                     (title.strip(), body.strip()),
+                )
+            return notepad_view(request)
+
+        @router.get("/{note_id}/edit", response_class=HTMLResponse)
+        def edit_note_form(request: Request, note_id: int):
+            with global_db.get_connection() as conn:
+                n = conn.execute("SELECT * FROM notes WHERE id = ? AND kind='note'", (note_id,)).fetchone()
+            if not n:
+                return notepad_view(request)
+            return _edit_note_form(n)
+
+        @router.post("/{note_id}/edit", response_class=HTMLResponse)
+        def edit_note(request: Request, note_id: int, title: str = Form(""), body: str = Form(...)):
+            with global_db.get_connection() as conn:
+                conn.execute(
+                    "UPDATE notes SET title = ?, body = ? WHERE id = ? AND kind='note'",
+                    (title.strip(), body.strip(), note_id),
                 )
             return notepad_view(request)
 
