@@ -51,6 +51,8 @@
             money: '#money-area',
             planner: '#planner-list',
             p2p: '#p2p-area',
+            reminders: '#reminders-area',
+            notepad: '#notepad-area',
             capital: '#capital-area',
             termux: '#termux-area',
             home: '#dash-cards'
@@ -122,6 +124,12 @@
             <button @click="refreshTab('p2p')"
                     :class="activeTab === 'p2p' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🛰️ P2P</button>
+            <button @click="refreshTab('reminders')"
+                    :class="activeTab === 'reminders' ? 'tab-active' : 'tab-inactive'"
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">🔔 Reminders</button>
+            <button @click="refreshTab('notepad')"
+                    :class="activeTab === 'notepad' ? 'tab-active' : 'tab-inactive'"
+                    class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">📝 Notepad</button>
             <button @click="refreshTab('termux')"
                     :class="activeTab === 'termux' ? 'tab-active' : 'tab-inactive'"
                     class="px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition border">📡 Auto-Expense</button>
@@ -320,6 +328,12 @@
                 <div class="text-slate-500 py-8 text-center text-sm">Loading P2P schedule…</div>
             </div>
         </div>
+
+        <!-- ============ REMINDERS TAB ============ -->
+        <div x-show="activeTab === 'reminders'" x-cloak class="space-y-5"><div id='reminders-area' hx-get='/api/notes/reminders' hx-trigger='load'></div></div>
+
+        <!-- ============ NOTEPAD TAB ============ -->
+        <div x-show="activeTab === 'notepad'" x-cloak class="space-y-5"><div id='notepad-area' hx-get='/api/notes/notepad' hx-trigger='load'></div></div>
 
         <!-- ============ MONEY TAB ============ -->
         <div x-show="activeTab === 'money'" x-cloak class="space-y-5">
