@@ -189,20 +189,26 @@ class NotesPlugin(LifeOSPlugin):
 
         def _edit_note_form(n):
             return f"""
-            <div id='note-{n['id']}' class='py-2 border-b border-dark-800/60'>
+            <div id='note-{n['id']}' class='py-2'>
                 <form hx-post='/api/notes/{n['id']}/edit' hx-target='#notepad-area' hx-swap='outerHTML'
                       @submit="toast = 'Note updated ✓'"
-                      class='space-y-2 bg-dark-950 border border-emerald-500/30 rounded-xl p-3'>
-                    <input type='text' name='title' value='{(n['title'] or '').replace(chr(39), '&#39;')}'
-                           placeholder='Title (optional)'
-                           class='w-full bg-dark-800 border border-dark-700 rounded-lg px-2 py-1.5 text-white text-sm'>
-                    <textarea name='body' rows='3' required
-                              placeholder='Note body…'
-                              class='w-full bg-dark-800 border border-dark-700 rounded-lg px-2 py-1.5 text-white text-sm'>{n['body'] or ''}</textarea>
-                    <div class='flex gap-2'>
-                        <button type='submit' class='bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-3 py-1.5 rounded-lg text-xs'>💾 Save</button>
+                      class='space-y-3 bg-dark-950 border-2 border-emerald-500/40 rounded-2xl p-5 shadow-lg shadow-emerald-500/5'>
+                    <div>
+                        <label class='block text-[10px] uppercase font-mono text-slate-400 mb-1'>Title</label>
+                        <input type='text' name='title' value='{(n['title'] or '').replace(chr(39), '&#39;')}'
+                               placeholder='Title (optional)'
+                               class='w-full bg-dark-800 border border-dark-700 rounded-xl px-4 py-3 text-white text-base font-medium focus:outline-none focus:border-emerald-500'>
+                    </div>
+                    <div>
+                        <label class='block text-[10px] uppercase font-mono text-slate-400 mb-1'>Note</label>
+                        <textarea name='body' rows='8' required
+                                  placeholder='Write something…'
+                                  class='w-full bg-dark-800 border border-dark-700 rounded-xl px-4 py-3 text-white text-base leading-relaxed focus:outline-none focus:border-emerald-500 resize-y'>{n['body'] or ''}</textarea>
+                    </div>
+                    <div class='flex gap-3 pt-1'>
+                        <button type='submit' class='flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold px-4 py-3 rounded-xl text-sm transition'>💾 Save</button>
                         <button type='button' hx-get='/api/notes/notepad' hx-target='#notepad-area' hx-swap='outerHTML'
-                                class='bg-dark-800 hover:bg-dark-700 text-slate-300 px-3 py-1.5 rounded-lg text-xs'>Cancel</button>
+                                class='bg-dark-800 hover:bg-dark-700 text-slate-300 px-5 py-3 rounded-xl text-sm transition'>Cancel</button>
                     </div>
                 </form>
             </div>"""
