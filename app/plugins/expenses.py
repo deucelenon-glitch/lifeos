@@ -152,11 +152,27 @@ class ExpensesPlugin(LifeOSPlugin):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 expenses = conn.execute("SELECT * FROM expenses ORDER BY id DESC LIMIT 20").fetchall()
-            
-            if not expenses:
-                return "<div class='text-slate-500 py-8 text-center'>No expenses logged this month.</div>"
+                month_row = conn.execute(
+                    "SELECT SUM(amount) FROM expenses WHERE strftime('%Y-%m', expense_date) = strftime('%Y-%m', 'now')"
+                ).fetchone()
+                all_row = conn.execute("SELECT SUM(amount) FROM expenses").fetchone()
 
-            html = "<div class='space-y-3'>"
+            month_total = month_row[0] if month_row and month_row[0] is not None else 0.0
+            all_total = all_row[0] if all_row and all_row[0] is not None else 0.0
+
+            summary = f"""
+            <div class='bg-dark-900 border border-dark-800 rounded-xl p-3 mb-3'>
+                <p class='text-xs text-slate-400 uppercase font-mono tracking-wider'>Spent this month</p>
+                <p class='text-2xl font-mono font-bold text-emerald-400'>€{month_total:.2f}
+                    <span class='text-xs text-slate-500 font-mono'>· €{all_total:.2f} all time</span>
+                </p>
+            </div>
+            """
+
+            if not expenses:
+                return summary + "<div class='text-slate-500 py-8 text-center'>No expenses logged this month.</div>"
+
+            html = summary + "<div class='space-y-3'>"
             for e in expenses:
                 html += f"""
                 <div class='bg-dark-900 border border-dark-700 rounded-xl p-4 flex items-center justify-between'>

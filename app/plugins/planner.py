@@ -136,6 +136,21 @@ class PlannerPlugin(LifeOSPlugin):
             </div>
             """
 
+            # Summary strip: total planned expense for the month (normalized) + plan count
+            try:
+                monthly_cost = self.monthly_plan_cost()
+            except Exception:
+                monthly_cost = 0.0
+            expense_plan_count = sum(1 for p in plans if p['target_type'] == 'expense')
+            summary = f"""
+            <div class='bg-dark-900 border border-dark-800 rounded-xl p-3 mt-1'>
+                <p class='text-xs text-slate-400 uppercase font-mono tracking-wider'>Planned expenses this month</p>
+                <p class='text-2xl font-mono font-bold text-emerald-400'>€{monthly_cost:.2f}
+                    <span class='text-xs text-slate-500 font-mono'>· {expense_plan_count} plan{'s' if expense_plan_count != 1 else ''}</span>
+                </p>
+            </div>
+            """
+
             if not plans:
                 empty_html = """
                 <div class='text-slate-500 py-8 text-center text-sm'>
@@ -220,9 +235,9 @@ class PlannerPlugin(LifeOSPlugin):
                 """)
 
             if cards:
-                html = header + "<div class='space-y-3 mt-3'>" + "".join(cards) + "</div>"
+                html = summary + header + "<div class='space-y-3 mt-3'>" + "".join(cards) + "</div>"
             else:
-                html = header + empty_html
+                html = summary + header + empty_html
             return html
 
         @router.post("/", response_class=HTMLResponse)
