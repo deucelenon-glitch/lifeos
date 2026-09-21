@@ -355,26 +355,50 @@ class P2PPlugin(LifeOSPlugin):
         @router.post("/config", response_class=HTMLResponse)
         def save_config(
             request: Request,
-            rate: float = Form(...),
-            order_size: float = Form(0),
-            reminder_time: str = Form(""),
-            monthly_goal: float = Form(0),
-            target_profit: float = Form(500),
-            premium_pct: float = Form(10),
+            rate: float = Form(None),
+            order_size: float = Form(None),
+            reminder_time: str = Form(None),
+            monthly_goal: float = Form(None),
+            target_profit: float = Form(None),
+            premium_pct: float = Form(None),
         ):
+            """Partial update — only fields present in the posted form are changed.
+            (The bracket form posts target_profit+premium_pct; the rate form posts
+            only rate. Missing fields must keep their stored values.)"""
             from app.database import db as global_db
             with global_db.get_connection() as conn:
                 cfg = self._cfg(conn)
-                reminder_time = reminder_time.strip()
+                # Start from stored values (or sensible defaults) so absent
+                # form fields are preserved instead of wiped to None.
+                cur = {
+                    "rate": float(cfg["rate"]) if cfg and cfg["rate"] else 1.15,
+                    "order_size": float(cfg["order_size"]) if cfg and cfg["order_size"] else 0,
+                    "reminder_time": (cfg["reminder_time"] or "") if cfg else "",
+                    "monthly_goal": float(cfg["monthly_goal"]) if cfg and cfg["monthly_goal"] else 0,
+                    "target_profit": float(cfg["target_profit"]) if cfg and cfg["target_profit"] else 500.0,
+                    "premium_pct": float(cfg["premium_pct"]) if cfg and cfg["premium_pct"] else 10.0,
+                }
+                if rate is not None:
+                    cur["rate"] = rate
+                if order_size is not None:
+                    cur["order_size"] = order_size
+                if reminder_time is not None:
+                    cur["reminder_time"] = reminder_time.strip()
+                if monthly_goal is not None:
+                    cur["monthly_goal"] = monthly_goal
+                if target_profit is not None:
+                    cur["target_profit"] = target_profit
+                if premium_pct is not None:
+                    cur["premium_pct"] = premium_pct
                 if cfg:
                     conn.execute(
                         "UPDATE p2p_config SET rate = ?, order_size = ?, reminder_time = ?, monthly_goal = ?, target_profit = ?, premium_pct = ? WHERE id = ?",
-                        (rate, order_size or None, reminder_time or None, monthly_goal or None, target_profit if target_profit else None, premium_pct if premium_pct else None, cfg["id"]),
+                        (cur["rate"], cur["order_size"] or None, cur["reminder_time"] or None, cur["monthly_goal"] or None, cur["target_profit"], cur["premium_pct"], cfg["id"]),
                     )
                 else:
                     conn.execute(
                         "INSERT INTO p2p_config (interval_minutes, rate, order_size, reminder_time, monthly_goal, target_profit, premium_pct) VALUES (480, ?, ?, ?, ?, ?, ?)",
-                        (rate, order_size or None, reminder_time or None, monthly_goal or None, target_profit if target_profit else None, premium_pct if premium_pct else None),
+                        (cur["rate"], cur["order_size"] or None, cur["reminder_time"] or None, cur["monthly_goal"] or None, cur["target_profit"], cur["premium_pct"]),
                     )
             return p2p_view(request)
 
