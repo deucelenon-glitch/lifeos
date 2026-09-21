@@ -91,6 +91,10 @@ class P2PPlugin(LifeOSPlugin):
             conn.execute("ALTER TABLE p2p_config ADD COLUMN order_size REAL")
         if "monthly_goal" not in cols:
             conn.execute("ALTER TABLE p2p_config ADD COLUMN monthly_goal REAL")
+        if "target_profit" not in cols:
+            conn.execute("ALTER TABLE p2p_config ADD COLUMN target_profit REAL")
+        if "premium_pct" not in cols:
+            conn.execute("ALTER TABLE p2p_config ADD COLUMN premium_pct REAL DEFAULT 10")
         if "last_reminder_date" not in cols:
             conn.execute("ALTER TABLE p2p_config ADD COLUMN last_reminder_date TEXT")
         conn.commit()
@@ -161,6 +165,12 @@ class P2PPlugin(LifeOSPlugin):
             order_size = cfg["order_size"] or 0
             reminder_time = cfg["reminder_time"] or ""
             monthly_goal = (goal_row["income_goal"] if goal_row else 0) or 0
+            target_profit = float(cfg["target_profit"] or 0) or 500.0   # € profit bracket
+            premium_pct = float(cfg["premium_pct"] or 0) or 10.0        # % premium on volume
+            # Volume turnover needed to hit the income bracket:
+            #   profit = volume × premium%  →  volume = profit / premium%
+            required_volume = _round2(target_profit / (premium_pct / 100)) if premium_pct > 0 else 0.0
+            bracket_label = f"€{target_profit:,.0f} @ {premium_pct:g}% ≙ €{required_volume:,.0f} turnover"
 
             # Monthly progress toward the P2P order goal (EUR received this month)
             month_prefix = datetime.now().strftime("%Y-%m")
@@ -174,17 +184,7 @@ class P2PPlugin(LifeOSPlugin):
             month_orders = mrow["c"] or 0
 
             # Projections: hit the Cashflow goal every month → 6-month / 1-year
-            proj_6 = _round2(monthly_goal * 6)
-            proj_12 = _round2(monthly_goal * 12)
-            pct = min(100.0, (month_eur / monthly_goal * 100) if monthly_goal > 0 else 0.0)
-            goal_left = _round2(max(0.0, monthly_goal - month_eur))
-            orders_needed = _round2(monthly_goal / order_size) if order_size else 0
-
-            # Reminder options every €50
-            size_opts = "".join(
-                f"<option value='{v}' {'selected' if order_size == v else ''}>€{v}</option>"
-                for v in range(50, 1001, 50)
-            )
+            month_profit_est = _round2(month_eur * (premium_pct / 100))
 
             rows_html = ""
             for o in orders:
@@ -234,39 +234,39 @@ class P2PPlugin(LifeOSPlugin):
                         <div class='text-[10px] text-slate-500'>spread {totals['buy'] - totals['sent']:.2f}</div>
                     </div>
                     <div>
-                        <div class='text-[10px] uppercase font-mono text-slate-400'>Month vs Goal</div>
-                        <div class='text-lg font-bold {"text-emerald-400" if monthly_goal and month_eur >= monthly_goal else "text-amber-400"} font-mono'>€{month_eur:.2f}</div>
-                        <div class='text-[10px] text-slate-500'>/ €{monthly_goal:.0f} goal · {month_orders} orders</div>
+                        <div class='text-[10px] uppercase font-mono text-slate-400'>Month Volume</div>
+                        <div class='text-lg font-bold {"text-emerald-400" if required_volume and month_eur >= required_volume else "text-amber-400"} font-mono'>€{month_eur:.2f}</div>
+                        <div class='text-[10px] text-slate-500'>/ €{required_volume:,.0f} needed · {month_orders} trades</div>
                     </div>
                 </div>
 
                 <div class='bg-dark-900 border border-dark-800 rounded-2xl p-4'>
-                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>⏰ Order Config</h4>
+                    <h4 class='font-semibold text-white text-xs uppercase mb-3'>⏰ Order Config — income bracket</h4>
                     <form hx-post='/api/p2p/config' hx-target='#p2p-area' hx-swap='outerHTML'
-                          @submit="toast = 'Config saved ✓'"
+                          @submit="toast = 'Bracket saved ✓'"
                           class='grid grid-cols-1 md:grid-cols-4 gap-2 items-end'>
                         <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Order size</label>
-                            <select name='order_size' class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
-                                {size_opts}
-                            </select>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Income bracket (€ profit)</label>
+                            <input type='number' step='10' name='target_profit' value='{target_profit:.0f}' min='50'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                         </div>
                         <div>
-                            <label class='text-[10px] uppercase font-mono text-slate-400'>Monthly goal</label>
-                            <div class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>€{monthly_goal:.0f} · <span class='text-slate-500'>from Cashflow</span></div>
+                            <label class='text-[10px] uppercase font-mono text-slate-400'>Premium %</label>
+                            <input type='number' step='0.5' name='premium_pct' value='{premium_pct:g}' min='0.5' max='100'
+                                   class='w-full bg-dark-950 border border-dark-800 rounded-lg px-2 py-2 text-white text-sm font-mono'>
                         </div>
                         <div class='bg-dark-950 rounded-lg px-2 py-2 text-center'>
-                            <div class='text-[10px] uppercase font-mono text-slate-400'>Progress</div>
-                            <span class='{"text-emerald-400" if monthly_goal and pct >= 100 else "text-amber-400"} font-mono text-sm font-bold'>{pct:.0f}%</span>
-                            <div class='text-[10px] text-slate-500'>€{goal_left:.0f} left</div>
+                            <div class='text-[10px] uppercase font-mono text-slate-400'>Required volume</div>
+                            <span class='text-emerald-400 font-mono text-sm font-bold'>€{required_volume:,.0f}</span>
+                            <div class='text-[10px] text-slate-500'>turnover needed</div>
                         </div>
                         <button type='submit' class='w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-2 rounded-xl text-sm'>Save</button>
                     </form>
-                    <div class='mt-2.5 flex gap-2 items-center text-xs'>
-                        <span class='text-slate-400'>📈 Projection:</span>
-                        <span class='px-2 py-1 rounded bg-dark-800 font-mono text-slate-200'>6mo → <b class='text-emerald-400'>€{proj_6:,.0f}</b></span>
-                        <span class='px-2 py-1 rounded bg-dark-800 font-mono text-slate-200'>1yr → <b class='text-emerald-400'>€{proj_12:,.0f}</b></span>
-                        <span class='text-slate-500'>at €{monthly_goal:.0f}/mo × {orders_needed:.0f} orders</span>
+                    <div class='mt-2.5 flex gap-2 items-center text-xs flex-wrap'>
+                        <span class='text-slate-400'>🧮 Bracket:</span>
+                        <span class='px-2 py-1 rounded bg-dark-800 font-mono text-slate-200'>{bracket_label}</span>
+                        <span class='px-2 py-1 rounded bg-dark-800 font-mono text-slate-200'>month so far → <b class='text-emerald-400'>€{month_eur:,.0f}</b> volume ≈ <b class='text-emerald-400'>€{month_profit_est:,.0f}</b> profit at {premium_pct:g}%</span>
+                        <span class='text-slate-500'>{month_orders} trades</span>
                     </div>
                 </div>
 
@@ -359,6 +359,8 @@ class P2PPlugin(LifeOSPlugin):
             order_size: float = Form(0),
             reminder_time: str = Form(""),
             monthly_goal: float = Form(0),
+            target_profit: float = Form(500),
+            premium_pct: float = Form(10),
         ):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
@@ -366,13 +368,13 @@ class P2PPlugin(LifeOSPlugin):
                 reminder_time = reminder_time.strip()
                 if cfg:
                     conn.execute(
-                        "UPDATE p2p_config SET rate = ?, order_size = ?, reminder_time = ?, monthly_goal = ? WHERE id = ?",
-                        (rate, order_size or None, reminder_time or None, monthly_goal or None, cfg["id"]),
+                        "UPDATE p2p_config SET rate = ?, order_size = ?, reminder_time = ?, monthly_goal = ?, target_profit = ?, premium_pct = ? WHERE id = ?",
+                        (rate, order_size or None, reminder_time or None, monthly_goal or None, target_profit if target_profit else None, premium_pct if premium_pct else None, cfg["id"]),
                     )
                 else:
                     conn.execute(
-                        "INSERT INTO p2p_config (interval_minutes, rate, order_size, reminder_time, monthly_goal) VALUES (480, ?, ?, ?, ?)",
-                        (rate, order_size or None, reminder_time or None, monthly_goal or None),
+                        "INSERT INTO p2p_config (interval_minutes, rate, order_size, reminder_time, monthly_goal, target_profit, premium_pct) VALUES (480, ?, ?, ?, ?, ?, ?)",
+                        (rate, order_size or None, reminder_time or None, monthly_goal or None, target_profit if target_profit else None, premium_pct if premium_pct else None),
                     )
             return p2p_view(request)
 

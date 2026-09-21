@@ -154,16 +154,53 @@ class HabitsPlugin(LifeOSPlugin):
                     "INSERT INTO habits (name, target_streak, weekly_target, cost_per) VALUES (?, ?, ?, ?)",
                     (name, target_streak, weekly_target, cost_per),
                 )
+                # Proper budget link: a habit with ×/week + € each drives a Planner
+                # expense plan (monthly cost), so Cashflow's budget (single source
+                # of truth = expense plans) reflects it automatically.
+                if (weekly_target or 0) and (cost_per or 0):
+                    monthly = round(float(weekly_target) * float(cost_per) * 52 / 12, 2)
+                    existing = conn.execute(
+                        "SELECT id FROM plans WHERE target_type = 'expense' AND lower(goal_label) = lower(?)",
+                        (name.strip(),),
+                    ).fetchone()
+                    if existing:
+                        conn.execute(
+                            "UPDATE plans SET cost_per = ?, frequency = 'monthly' WHERE id = ?",
+                            (monthly, existing["id"]),
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT INTO plans (target_type, target_id, target_name, goal_label, frequency, target_quantity, cost_per) VALUES ('expense', 0, ?, ?, 'monthly', 0, ?)",
+                            (name.strip(), name.strip(), monthly),
+                        )
             return habits_list_html(request)
 
         @router.post("/{habit_id}/plan", response_class=HTMLResponse)
         def set_habit_plan(request: Request, habit_id: int, weekly_target: int = Form(0), cost_per: float = Form(0)):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
+                h = conn.execute("SELECT name, weekly_target, cost_per FROM habits WHERE id = ?", (habit_id,)).fetchone()
                 conn.execute(
                     "UPDATE habits SET weekly_target = ?, cost_per = ? WHERE id = ?",
                     (weekly_target, cost_per, habit_id),
                 )
+                # Sync the linked Planner expense plan so Cashflow budget stays correct.
+                if h and (weekly_target or 0) and (cost_per or 0):
+                    monthly = round(float(weekly_target) * float(cost_per) * 52 / 12, 2)
+                    existing = conn.execute(
+                        "SELECT id FROM plans WHERE target_type = 'expense' AND lower(goal_label) = lower(?)",
+                        (h["name"].strip(),),
+                    ).fetchone()
+                    if existing:
+                        conn.execute(
+                            "UPDATE plans SET cost_per = ?, frequency = 'monthly' WHERE id = ?",
+                            (monthly, existing["id"]),
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT INTO plans (target_type, target_id, target_name, goal_label, frequency, target_quantity, cost_per) VALUES ('expense', 0, ?, ?, 'monthly', 0, ?)",
+                            (h["name"].strip(), h["name"].strip(), monthly),
+                        )
             return habits_list_html(request)
 
         @router.get("/plan-cost")
@@ -220,6 +257,7 @@ class HabitsPlugin(LifeOSPlugin):
         def delete_habit(request: Request, habit_id: int):
             from app.database import db as global_db
             with global_db.get_connection() as conn:
+                h = conn.execute("SELECT name FROM habits WHERE id = ?", (habit_id,)).fetchone()
                 conn.execute("DELETE FROM habits WHERE id = ?", (habit_id,))
                 conn.execute("DELETE FROM habit_logs WHERE habit_id = ?", (habit_id,))
                 # Keep Planner in sync: remove any plan pointing at this habit
@@ -228,6 +266,12 @@ class HabitsPlugin(LifeOSPlugin):
                     "DELETE FROM plans WHERE target_type = 'habit' AND target_id = ?",
                     (habit_id,),
                 )
+                # Also drop the linked expense plan (budget coupling) — no habit, no plan.
+                if h:
+                    conn.execute(
+                        "DELETE FROM plans WHERE target_type = 'expense' AND lower(goal_label) = lower(?)",
+                        (h["name"].strip(),),
+                    )
             return habits_list_html(request)
 
         return router
