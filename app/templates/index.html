@@ -150,23 +150,39 @@
             <div id="dash-cards" hx-get="/api/dashboard" hx-trigger="load" hx-swap="outerHTML">
                 <div class="bg-dark-950 border border-dark-800 rounded-2xl p-5"><div class="text-sm text-slate-500">…</div></div>
             </div>
-            <!-- Quick actions -->
-            <div class="grid grid-cols-2 gap-3 mt-5">
-                <button @click="activeTab = 'habits'" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-2xl p-4 text-left">
-                    <span class="block text-lg">🔥 Add habit</span>
-                    <span class="text-xs text-slate-500">Track a streak</span>
+            <!-- Quick actions — compact chips, one per tab -->
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-5">
+                <button @click="refreshTab('habits')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
+                    <span class="block text-sm">🔥 Habits</span>
+                    <span class="text-[10px] text-slate-500">Track a streak</span>
                 </button>
-                <button @click="activeTab = 'expenses'" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-2xl p-4 text-left">
-                    <span class="block text-lg">💰 Log expense</span>
-                    <span class="text-xs text-slate-500">Track your burn</span>
+                <button @click="refreshTab('expenses')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
+                    <span class="block text-sm">💰 Expenses</span>
+                    <span class="text-[10px] text-slate-500">Track your burn</span>
                 </button>
-                <button @click="activeTab = 'planner'" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-2xl p-4 text-left">
-                    <span class="block text-lg">🗓️ New plan</span>
-                    <span class="text-xs text-slate-500">Goal vs actual</span>
+                <button @click="refreshTab('planner')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
+                    <span class="block text-sm">🗓️ Planner</span>
+                    <span class="text-[10px] text-slate-500">New plan</span>
                 </button>
-                <button @click="activeTab = 'p2p'" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-2xl p-4 text-left">
-                    <span class="block text-lg">🛰️ P2P schedule</span>
-                    <span class="text-xs text-slate-500">Order reminders</span>
+                <button @click="refreshTab('money')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
+                    <span class="block text-sm">💵 Cashflow</span>
+                    <span class="text-[10px] text-slate-500">Budget & income</span>
+                </button>
+                <button @click="refreshTab('p2p')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
+                    <span class="block text-sm">🛰️ P2P</span>
+                    <span class="text-[10px] text-slate-500">Arbitrage ledger</span>
+                </button>
+                <button @click="refreshTab('capital')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
+                    <span class="block text-sm">🏦 Capital</span>
+                    <span class="text-[10px] text-slate-500">Balance & APY</span>
+                </button>
+                <button @click="refreshTab('termux')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
+                    <span class="block text-sm">📡 Auto-Expense</span>
+                    <span class="text-[10px] text-slate-500">Auto rules</span>
+                </button>
+                <button @click="refreshTab('telegram')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
+                    <span class="block text-sm">🤖 Bot</span>
+                    <span class="text-[10px] text-slate-500">Telegram settings</span>
                 </button>
             </div>
         </div>
