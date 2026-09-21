@@ -71,12 +71,15 @@ def load_plugins(app: FastAPI):
     app.state.plugins = {}
     plugins_dir = settings.PLUGINS_DIR
 
+    # Plugins stripped from the UI per Dex (2026-09-21): notepad + reminders.
+    DISABLED_PLUGINS = {"notes"}
+
     # Ensure plugins directory exists
     plugins_dir.mkdir(parents=True, exist_ok=True)
 
     # Iterate over packages in app.plugins
     for _, module_name, _ in pkgutil.iter_modules([str(plugins_dir)]):
-        if module_name == "base":
+        if module_name == "base" or module_name in DISABLED_PLUGINS:
             continue
         try:
             module = importlib.import_module(f"app.plugins.{module_name}")

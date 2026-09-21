@@ -86,24 +86,31 @@ class PlannerPlugin(LifeOSPlugin):
 
     def monthly_plan_cost(self) -> float:
         """Σ of Budget € (expense) plan costs, normalized to monthly.
-        Each plan: cost_per per occurrence × frequency → monthly."""
+        Each plan: cost_per per occurrence × frequency → monthly.
+        If cost_per is unset (0), fall back to target_quantity — the
+        monthly budget amount entered at plan creation (e.g. Rent 200)."""
         from app.database import db as global_db
         with global_db.get_connection() as conn:
             rows = conn.execute(
                 "SELECT frequency, cost_per, target_quantity FROM plans WHERE target_type = 'expense'"
             ).fetchall()
         total = 0.0
+        from datetime import date as _date
+        import calendar as _cal
+        days_in_month = _cal.monthrange(_date.today().year, _date.today().month)[1]
         for p in rows:
             cp = float(p["cost_per"] or 0)
             if cp <= 0:
+                cp = float(p["target_quantity"] or 0)  # fall back: monthly budget
+            if cp <= 0:
                 continue
-            freq = p["frequency"] or "weekly"
+            freq = p["frequency"] or "monthly"
             if freq == "monthly":
                 total += cp
             elif freq == "daily":
-                total += cp * 30.4
+                total += cp * days_in_month   # actual days this month
             else:  # weekly
-                total += cp * 52 / 12
+                total += cp * (days_in_month / 7)  # actual weeks this month
         return round(total, 2)
 
     def register_routes(self) -> APIRouter:
@@ -112,6 +119,9 @@ class PlannerPlugin(LifeOSPlugin):
         @router.get("/view", response_class=HTMLResponse)
         def planner_view(request: Request):
             from app.database import db as global_db
+            from datetime import date as _date
+            import calendar as _cal
+            days_in_month = _cal.monthrange(_date.today().year, _date.today().month)[1]
             with global_db.get_connection() as conn:
                 plans = conn.execute("SELECT * FROM plans ORDER BY id DESC").fetchall()
                 self._auto_link_habits(conn, plans)
@@ -203,16 +213,20 @@ class PlannerPlugin(LifeOSPlugin):
 
                 # Cost line for per-cost plans (like habits' Plan: x/wk · €y each)
                 cost_line = ""
-                if p['target_type'] == 'expense' and (p['cost_per'] or 0):
-                    freq_notes = {'weekly': '× 52/12 →', 'monthly': '× 1 →'}.get(p['frequency'], '× 4.33 →')
-                    if p['frequency'] == 'monthly':
-                        monthly = float(p['cost_per'])
-                    elif p['frequency'] == 'daily':
-                        monthly = float(p['cost_per']) * 30.4
-                    else:
-                        monthly = float(p['cost_per']) * 52 / 12
-                    cost_line = (f"<p class='text-xs text-slate-500 mt-0.5'>Plan cost: "
-                                 f"€{p['cost_per']:.2f} each · {p['frequency']} → <span class='text-emerald-400 font-mono font-bold'>€{monthly:.2f}/mo</span></p>")
+                if p['target_type'] == 'expense':
+                    cost_unit = float(p['cost_per'] or 0)
+                    if cost_unit <= 0:
+                        cost_unit = float(p['target_quantity'] or 0)
+                    if cost_unit > 0:
+                        freq_notes = {'weekly': '× year/12 →', 'monthly': '× 1 →'}.get(p['frequency'], '× days →')
+                        if p['frequency'] == 'monthly':
+                            monthly = cost_unit
+                        elif p['frequency'] == 'daily':
+                            monthly = cost_unit * days_in_month
+                        else:
+                            monthly = cost_unit * (days_in_month / 7)
+                        cost_line = (f"<p class='text-xs text-slate-500 mt-0.5'>Plan cost: "
+                                 f"€{cost_unit:.2f} each · {p['frequency']} → <span class='text-emerald-400 font-mono font-bold'>€{monthly:.2f}/mo</span></p>")
 
                 cards.append(f"""
                 <div class='bg-dark-900 border border-dark-700 rounded-xl p-4'>
