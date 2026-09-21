@@ -150,8 +150,8 @@
             <div id="dash-cards" hx-get="/api/dashboard" hx-trigger="load" hx-swap="outerHTML">
                 <div class="bg-dark-950 border border-dark-800 rounded-2xl p-5"><div class="text-sm text-slate-500">…</div></div>
             </div>
-            <!-- Quick actions — compact chips, one per tab -->
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mt-5">
+            <!-- Quick actions — compact chips, one per tab, always 2 rows of 4 -->
+            <div class="grid grid-cols-4 gap-2 mt-5">
                 <button @click="refreshTab('habits')" class="bg-dark-900 border border-dark-700 hover:border-emerald-500/50 rounded-xl p-2.5 text-left">
                     <span class="block text-sm">🔥 Habits</span>
                     <span class="text-[10px] text-slate-500">Track a streak</span>
